@@ -23,6 +23,7 @@ export interface Owner {
   role: Role;
   color: string; // avatar tint
   photo?: string; // data URL
+  canSignIn?: boolean; // false for sample members without a login
 }
 
 export interface Lead {
@@ -100,6 +101,7 @@ export interface Settings {
     timeZone: string;
     dateFormat: string;
     monthlyTarget: number;
+    isDemo?: boolean; // workspace currently holds sample data
   };
   probabilities: Record<BoardStage, number>; // percent 0-100
   notifications: { emailUpdates: boolean; taskReminders: boolean; weeklySummary: boolean };

@@ -1,5 +1,6 @@
-// End-to-end smoke test. Usage:
-//   npm run build && npm run preview &      (serves http://127.0.0.1:4173)
+// End-to-end test of the full stack. Usage:
+//   (cd server && npm run dev) &            # API on :3000 with a migrated Postgres
+//   npm run build && npm run preview &      # frontend on :4173, proxies /api to :3000
 //   npm i -D playwright && node scripts/e2e.cjs
 const { chromium } = require('playwright');
 const fs = require('fs');
@@ -14,17 +15,53 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok  ', m); } else { fail+
   const errs = [];
   p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
   p.on('pageerror', (e) => errs.push('PAGEERR ' + e.message));
+  if (process.env.DEBUG_E2E) p.on('response', (r) => { if (r.url().includes('/api/') && r.status() >= 400) console.log('   [api]', r.status(), r.request().method(), r.url().replace(BASE, '')); });
+  // Every mutation is now a network round trip: after interactions, wait for in-flight API calls to finish.
+  let inflight = 0;
+  p.on('request', (r) => { if (r.url().includes('/api/')) inflight++; });
+  p.on('requestfinished', (r) => { if (r.url().includes('/api/')) inflight--; });
+  p.on('requestfailed', (r) => { if (r.url().includes('/api/')) inflight--; });
+  const settle = async () => { await p.waitForTimeout(60); for (let i = 0; i < 60 && inflight > 0; i++) await p.waitForTimeout(50); await p.waitForTimeout(80); };
+  const LocatorProto = Object.getPrototypeOf(p.getByRole('button'));
+  for (const m of ['click', 'check', 'selectOption', 'dragTo', 'press', 'setInputFiles']) {
+    const orig = LocatorProto[m];
+    LocatorProto[m] = async function (...a) { const r = await orig.apply(this, a); await settle(); return r; };
+  }
+  const origPress = p.keyboard.press.bind(p.keyboard);
+  p.keyboard.press = async (...a) => { const r = await origPress(...a); await settle(); return r; };
   const toastText = async () => (await p.locator('[role=status],[role=alert]').allTextContents()).join('|');
 
-  console.log('Navigation');
+  console.log('Auth');
+  const stamp = Date.now();
+  const EMAIL = `maya.${stamp}@example.com`;
+  const NEW_EMAIL = `maya.profile.${stamp}@example.com`; // the profile test changes the sign-in email
+  await p.goto(BASE + '/leads');
+  await p.waitForURL('**/login');
+  ok(true, 'unauthenticated visit redirects to /login');
+  await p.getByRole('link', { name: 'Create a workspace' }).click();
+  await p.getByRole('button', { name: 'Create workspace' }).click();
+  ok(await p.getByText('Enter your name.').isVisible(), 'register validation shown');
+  await p.getByLabel('Your name').fill('Maya Chen');
+  await p.getByLabel('Email').fill(EMAIL);
+  await p.getByLabel('Password').fill('short');
+  await p.getByLabel('Workspace name').fill('E2E Sales');
+  await p.getByRole('button', { name: 'Create workspace' }).click();
+  ok(await p.getByText('Use at least 8 characters.').first().isVisible(), 'register password rule');
+  await p.getByLabel('Password').fill('password123');
+  await p.getByRole('button', { name: 'Create workspace' }).click();
+  await p.waitForURL('**/leads');
+  ok(true, 'registered with sample data and returned to the page that was requested');
   await p.goto(BASE + '/');
+  await p.waitForSelector('aside');
+
+  console.log('Navigation');
   await p.waitForURL('**/overview'); ok(p.url().endsWith('/overview'), 'root redirects to /overview');
   for (const [label, path] of [['Leads', '/leads'], ['Pipeline', '/pipeline'], ['Tasks', '/tasks'], ['Reports', '/reports'], ['Settings', '/settings'], ['Overview', '/overview']]) {
     await p.locator('aside nav a', { hasText: label }).click();
     ok(p.url().includes(path), `sidebar -> ${path}`);
     ok(await p.locator('aside nav a[aria-current=page]').innerText() === label, `active highlight = ${label}`);
   }
-  ok(await p.getByText('Demo workspace').first().isVisible(), 'demo workspace label visible');
+  ok(await p.getByText('Sample data', { exact: true }).first().isVisible(), 'sample-data banner visible');
   ok((await p.locator('aside').innerText()).includes('Maya Chen'), 'sidebar profile Maya Chen');
 
   console.log('Overview drill-downs');
@@ -201,7 +238,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok  ', m); } else { fail+
   await p.getByLabel('Email').fill('nope');
   await p.getByRole('button', { name: 'Save profile' }).click();
   ok(await p.getByText('Enter a valid email address.').isVisible(), 'profile email validation');
-  await p.getByLabel('Email').fill('maya@northstar.demo');
+  await p.getByLabel('Email').fill(NEW_EMAIL);
   await p.getByRole('button', { name: 'Save profile' }).click();
   await p.reload();
   ok((await p.locator('aside').innerText()).includes('VP Sales'), 'profile persists; sidebar updated');
@@ -263,7 +300,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok  ', m); } else { fail+
   const rc = fs.readFileSync(TMP + '/report.csv', 'utf8');
   ok(rc.includes('Total revenue') && rc.includes('Funnel stage') && rc.includes('Maya Chen'), 'report CSV export');
   // consistency: revenue all-time = sum of won deals
-  const wonSum = await p.evaluate(() => JSON.parse(localStorage.getItem('northstar-crm:v1')).deals.filter((d) => d.stage === 'Won').reduce((a, d) => a + d.value, 0));
+  const wonSum = await p.evaluate(async () => (await (await fetch('/api/data')).json()).data.deals.filter((d) => d.stage === 'Won').reduce((a, d) => a + d.value, 0));
   await p.getByRole('tab', { name: 'Sales overview' }).click();
   const revText = await p.getByText('Total revenue').first().locator('..').locator('..').innerText();
   ok(revText.replace(/[^0-9]/g, '').startsWith(String(wonSum)), `report revenue (all time) equals sum of Won deals (${wonSum})`);
@@ -272,13 +309,87 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok  ', m); } else { fail+
   await p.getByLabel('Owner').selectOption({ label: 'Sam Rivera' });
   await p.waitForTimeout(200);
 
-  console.log('Persistence reset');
-  await p.goto(BASE + '/settings?section=workspace');
-  await p.getByRole('button', { name: 'Reset demo data' }).click();
-  await p.getByRole('dialog').getByRole('button', { name: 'Reset' }).click();
+  console.log('Security, team and sample data');
+  await p.goto(BASE + '/settings?section=security');
+  await p.getByLabel('Current password').fill('wrong-wrong');
+  await p.getByLabel('New password', { exact: true }).fill('newpassword9');
+  await p.getByLabel('Confirm new password').fill('newpassword9');
+  await p.getByRole('button', { name: 'Change password' }).click();
+  await p.waitForTimeout(400);
+  ok((await toastText()).includes('current password is incorrect'), 'wrong current password rejected by server');
+  await p.getByLabel('Current password').fill('password123');
+  await p.getByRole('button', { name: 'Change password' }).click();
+  await p.waitForTimeout(400);
+  ok((await toastText()).includes('Password changed'), 'password changed');
+  await p.goto(BASE + '/settings?section=team');
+  await p.getByRole('button', { name: 'Add member' }).click();
+  await p.getByRole('dialog').getByLabel('Full name').fill('Vic Viewer');
+  await p.getByRole('dialog').getByLabel('Email').fill(`vic.${stamp}@example.com`);
+  await p.getByRole('dialog').getByLabel('Role').selectOption('Viewer');
+  await p.getByRole('dialog').getByLabel('Initial password').fill('viewerpass1');
+  await p.getByRole('dialog').getByRole('button', { name: 'Add member' }).click();
+  await p.waitForTimeout(400);
+  ok(await p.getByText('Vic Viewer').first().isVisible(), 'member added');
+  await p.getByLabel('Role for Tom Cook').selectOption('Manager');
   await p.waitForTimeout(300);
+  ok(await p.getByLabel('Role for Tom Cook').inputValue() === 'Manager', 'role change persisted');
+
+  console.log('Sign out / sign in / roles');
+  await p.getByRole('button', { name: 'Sign out' }).first().click();
+  await p.waitForURL('**/login');
+  ok(true, 'sign out returns to /login');
   await p.goto(BASE + '/leads');
-  ok((await p.locator('text=Showing').first().innerText()).includes('of 63'), 'reset restores 63 seed leads');
+  await p.waitForURL('**/login');
+  ok(true, 'protected page redirects after sign out');
+  await p.getByLabel('Email').fill(NEW_EMAIL);
+  await p.getByLabel('Password').fill('password123');
+  await p.getByRole('button', { name: 'Sign in' }).click();
+  await p.waitForTimeout(500);
+  ok(await p.getByText('Incorrect email or password.').isVisible(), 'old password no longer works after change');
+  await p.getByLabel('Password').fill('newpassword9');
+  await p.getByRole('button', { name: 'Sign in' }).click();
+  await p.waitForSelector('aside');
+  ok(true, 'sign in with new password');
+  await p.getByRole('button', { name: 'Sign out' }).first().click();
+  await p.waitForURL('**/login');
+  await p.getByLabel('Email').fill(`vic.${stamp}@example.com`);
+  await p.getByLabel('Password').fill('viewerpass1');
+  await p.getByRole('button', { name: 'Sign in' }).click();
+  await p.waitForSelector('aside');
+  await p.goto(BASE + '/leads');
+  await p.getByRole('button', { name: 'Add lead' }).first().click();
+  await p.getByLabel('Full name').fill('Blocked Lead');
+  await p.getByLabel('Company', { exact: false }).first().fill('Nope');
+  await p.getByRole('button', { name: 'Add lead' }).last().click();
+  await p.waitForTimeout(400);
+  ok((await toastText()).includes('read-only'), 'viewer is blocked from writing (server 403 shown)');
+  await p.keyboard.press('Escape');
+  await p.getByRole('button', { name: 'Sign out' }).first().click();
+  await p.waitForURL('**/login');
+  await p.getByLabel('Email').fill(NEW_EMAIL);
+  await p.getByLabel('Password').fill('newpassword9');
+  await p.getByRole('button', { name: 'Sign in' }).click();
+  await p.waitForSelector('aside');
+
+  console.log('Replace / clear data');
+  await p.goto(BASE + '/settings?section=workspace');
+  await p.getByRole('button', { name: 'Delete all leads, deals and tasks' }).click();
+  await p.getByRole('dialog').getByRole('button', { name: 'Delete everything' }).click();
+  await p.waitForTimeout(500);
+  await p.goto(BASE + '/leads');
+  ok(await p.getByText('No leads yet').isVisible(), 'cleared workspace shows empty state');
+  await p.goto(BASE + '/overview');
+  ok(await p.getByText('Nothing due today').isVisible(), 'overview handles empty workspace');
+  await p.goto(BASE + '/reports');
+  ok(await p.getByText('No data for this period').isVisible(), 'reports handle empty workspace');
+  await p.goto(BASE + '/pipeline');
+  ok(await p.locator('[data-stage]').count() === 5, 'pipeline renders empty columns');
+  await p.goto(BASE + '/settings?section=workspace');
+  await p.getByRole('button', { name: 'Replace with sample data' }).click();
+  await p.getByRole('dialog').getByRole('button', { name: 'Replace' }).click();
+  await p.waitForTimeout(800);
+  await p.goto(BASE + '/leads');
+  ok((await p.locator('text=Showing').first().innerText()).includes('of 63'), 'sample data restored (63 leads)');
 
   console.log('\nConsole errors:', errs.length ? errs : 'none');
   console.log(`\n${pass} passed, ${fail} failed`);

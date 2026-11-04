@@ -1,90 +1,127 @@
 # Northstar CRM
 
-A responsive lead-management web app (Overview, Leads, Pipeline, Tasks, Reports, Settings) built with
-**React 18, TypeScript, Tailwind CSS, Lucide icons and Recharts**.
+A lead-management web app: **React 18 + TypeScript + Tailwind + Recharts** frontend and a
+**Node.js (Express + TypeScript) + PostgreSQL** backend with email/password authentication.
 
-> **This is a demo workspace.** All data is realistic sample data stored in your browser's `localStorage`.
-> There is no backend, sign-in, email delivery, billing or third-party integration. Anything that would need
-> one is labelled **Not connected** / **Requires setup** in the UI and never pretends to succeed.
+Pages: Overview, Leads, Pipeline, Tasks, Reports, Settings. Design references live in [`UI of northstar/`](./UI%20of%20northstar)
+(Settings had no reference screenshot, so it follows the same design system).
 
-Design reference screenshots live in [`UI of northstar/`](./UI%20of%20northstar). The app is built from real
-components; the screenshots are not used in the UI. (Settings had no reference screenshot, so it follows the same design system.)
+## Quick start
 
-## Run it
-
-Requires Node 18+.
+Requires Node 18+ and PostgreSQL 14+.
 
 ```bash
-npm install
-npm run dev        # http://localhost:5173
+# 1. Database (any Postgres works; this starts one with Docker)
+docker compose up -d db
+
+# 2. Install both projects
+npm run setup
+
+# 3. Configure the API (defaults match docker-compose.yml)
+cp server/.env.example server/.env
+
+# 4. Run API (http://localhost:3000, auto-migrates the schema) and frontend (http://localhost:5173)
+npm run server          # terminal 1
+npm run dev             # terminal 2
 ```
+
+Open http://localhost:5173, choose **Create a workspace**, and leave **Start with sample data** ticked to explore with
+realistic records (you can delete them in Settings → Workspace → Data).
+
+Vite proxies `/api` to the API, so the session cookie is same-origin and no CORS setup is needed in development.
+
+### Production
 
 ```bash
-npm run build      # type-check + production build into dist/
-npm run preview    # serve the production build on http://localhost:4173
+npm run build                                   # frontend -> dist/
+cd server && NODE_ENV=production \
+  DATABASE_URL=postgres://... JWT_SECRET=$(openssl rand -hex 32) npm start
 ```
 
-Use **Settings → Workspace → Reset demo data** to restore the seed data at any time.
+In production the API also serves `dist/` (single deployable) and **refuses to start without a strong `JWT_SECRET`**.
+Put it behind HTTPS (the session cookie is `Secure` in production). Migrations run automatically on start
+(`npm run server:migrate` runs them alone).
 
-## Project structure
+| Env var (server/.env) | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Postgres connection string |
+| `JWT_SECRET` | Signs session tokens. Required (≥32 chars) when `NODE_ENV=production` |
+| `PORT` | API port (default 3000) |
+| `AUTH_RATE_LIMIT` | Sign-in/register attempts per IP per 15 min (default 30) |
+| `CORS_ORIGIN` | Only if the frontend is served from a different origin than the API |
+
+## Architecture
 
 ```
-src/
-  types.ts                 Domain types (Lead, Deal, Task, Note, Activity, Owner, Settings, Database)
-  data/
-    seed.ts                Deterministic, date-relative sample data (63 leads, 52 deals, 27 tasks, notes, activity)
-    repository.ts          Repository interface + localStorage implementation  <-- backend swap point
-  store/StoreContext.tsx   Single shared store: all CRUD actions, activity log, toasts, persistence
-  lib/                     Pure helpers: metrics, reports, dates, csv, format, validate
-  hooks/                   useFormat (currency/date prefs), useFocusTrap, useSources
-  components/
-    ui/                    Button, Form controls, Badge, Avatar, Modal/Confirm, Drawer, Toast, Tabs, ...
-    layout/                Sidebar + AppShell (desktop sidebar, tablet icon rail, mobile drawer)
-    charts/                Recharts wrappers (revenue trend, donut, bars)
-    leads/ pipeline/ tasks/  Feature components (forms, lead drawer, CSV import wizard)
-  pages/                   Overview, Leads, Pipeline, Tasks, Reports, Settings
-scripts/e2e.cjs           Playwright smoke test (73 checks)
+src/                         Frontend
+  api/client.ts              fetch wrapper (cookies, error handling)
+  store/SessionContext.tsx   sign-in state;  store/StoreContext.tsx  workspace data + async actions
+  pages/ components/ lib/    UI, charts, metric and report calculations
+server/
+  migrations/*.sql           Schema (applied in order, tracked in schema_migrations)
+  src/app.ts                 Express app (helmet, cookies, routes, SPA hosting in production)
+  src/routes/                auth, leads, deals, tasks, account (profile/team/workspace)
+  src/validation.ts          zod schemas for every request body
+  src/snapshot.ts            Builds the workspace snapshot the frontend consumes
+  src/seed/                  Sample-data generator and loader
+  test/api.test.ts           Integration tests against a real Postgres
+scripts/e2e.cjs              Playwright end-to-end test of the whole stack
 ```
 
-### Adding a backend later
+**How data flows.** The server owns all business rules (cascading deletes, deal-stage → lead-status sync, activity
+log, close dates). Every mutation endpoint runs in a transaction and responds with `{ result, data }`, where `data`
+is the fresh workspace snapshot; the frontend simply replaces its state with it. Deal moves and task check-offs are applied
+optimistically and reconciled with the response. Metrics and reports are computed in the frontend from that snapshot.
 
-Components never touch `localStorage`. They call actions on the store, and the store persists through the
-`Repository` interface (`load`, `save`, `reset`) in `src/data/repository.ts`. To go server-backed, implement that
-interface against your API (or replace `commit()` in the store with per-entity mutations) and swap the exported
-`repository`. Types in `src/types.ts` are the contract.
+### Data model (PostgreSQL)
 
-## Behaviour and metric definitions
+`workspaces` · `users` (workspace members; `password_hash` is NULL for sample members who cannot sign in) · `leads` ·
+`deals` (FK → leads, cascade) · `tasks` (FK → leads cascade, deals set-null) · `notes` · `activities`.
+Money is `numeric(14,2)`, timestamps are `timestamptz`, enums are `CHECK` constrained. Every row carries a
+`workspace_id`, and every query filters by the signed-in user's workspace (tested for cross-tenant isolation).
 
-One shared dataset powers every page, so a change on one page appears everywhere immediately.
+### API (all under `/api`, JSON, session cookie)
 
-- **Deal stage ↔ lead status:** moving a deal updates the linked lead's status; marking it Lost sets the lead to Lost.
-- **Open pipeline** = deals not Won/Lost. **Weighted value** = Σ value × stage probability (configurable in Settings → Workspace).
-- **Won revenue** (Pipeline cards) = Won deals closed this quarter. Pipeline summary cards respect owner/priority filters only.
-- **Win rate** = won ÷ (won + lost) among deals closed in the period.
-- **Avg. sales cycle** = mean days from deal creation to close for deals won in the period.
-- **Lead conversion** (Reports) = leads created in the period that are now Won ÷ leads created in the period (cohort based, so very recent periods read low).
-- **Funnel** = leads created in the period, counted by furthest stage reached; Lost leads count only toward "Leads".
-- Change indicators compare with the equally long previous period and are hidden for "All time". Periods with no data show empty states / "—".
-- **Tasks:** Overdue = open and due before today; Due today = open and due today; Upcoming = open, due tomorrow or later.
+| Area | Endpoints |
+| --- | --- |
+| Auth | `POST /auth/register` · `/auth/login` · `/auth/logout` · `GET /auth/me` · `POST /auth/change-password` |
+| Data | `GET /data` (workspace snapshot) |
+| Leads | `POST /leads` · `PATCH /leads/:id` · `PATCH /leads/bulk` · `POST /leads/bulk-delete` · `POST /leads/import` · `POST /leads/:id/notes` |
+| Deals | `POST /deals` · `PATCH /deals/:id` · `POST /deals/:id/move` · `/lost` · `/reopen` · `DELETE /deals/:id` |
+| Tasks | `POST /tasks` · `PATCH /tasks/:id` · `POST /tasks/:id/complete` · `DELETE /tasks/:id` |
+| Account | `PATCH /me` · `PATCH /me/notifications` · `POST /users` · `PATCH /users/:id/role` · `PATCH /workspace` · `POST /workspace/sample-data` · `DELETE /workspace/data` |
 
-## Feature checklist
+Errors are `{ "error": "message", "fields": { "field": "message" } }` with 400 (validation), 401, 403, 404, 409.
 
-- **Overview:** KPIs with sparklines, pipeline by stage, tasks due today (completable), activity feed, source donut. Cards, rows and activities deep-link to filtered pages or records.
-- **Leads:** search, sortable columns + sort menu, status tabs, owner/source/value filters, pagination, row selection, add/edit/delete (confirmed), bulk owner/status/delete, details drawer (contact, notes, deals, tasks, history), CSV import (column mapping, validation, duplicate detection) and CSV export (selected or filtered rows; formula-injection safe).
-- **Pipeline:** kanban with drag-and-drop (plus Alt+←/→ keyboard and a stage select on touch devices), board/list toggle, owner/priority/close-date filters, add/edit deals, mark Lost (with reason) / reopen, per-column counts and totals.
-- **Tasks:** summary cards, tabs, Overdue/Today/Tomorrow/Later groups, add/edit/delete/complete/reopen, calendar with day filter, daily progress, owner/priority/status filters.
-- **Reports:** three tabs, date and owner filters, revenue vs. target, funnel, source and team tables, CSV export and print stylesheet.
-- **Settings:** profile (photo upload), workspace (currency, language, time zone, date format, target, stage probabilities), team roles, notification preferences, integrations / security / billing with honest "Not connected / Requires setup" states, JSON export and reset.
+### Security notes
 
-## Known limitations
+- Passwords hashed with bcrypt; sign-in is rate limited and does not reveal whether an email exists.
+- Session = signed JWT in an `HttpOnly`, `SameSite=Lax` cookie (7 days); the user and role are re-read from the database on every request.
+- All SQL is parameterised; request bodies are validated with zod; `helmet` sets security headers; CSV export neutralises spreadsheet formulas.
+- Roles: **Admin** (everything, incl. team/workspace settings/data reset), **Manager** and **Sales rep** (create/edit leads, deals, tasks), **Viewer** (read-only). Enforced on the server.
 
-- Currency setting changes formatting only; amounts are not converted. Only English is available.
-- Time zone affects displayed times; Today/Tomorrow grouping follows the device clock.
-- Roles are labels; nothing is permission-gated because there is no authentication.
-- No company logos or photos are bundled; avatars and logos are generated initials.
-- `localStorage` is per browser profile and limited (~5 MB); profile photos are downscaled to keep it small.
+## Metric definitions
+
+- **Open pipeline** = deals not Won/Lost. **Weighted value** = Σ value × stage probability (Settings → Workspace).
+- **Win rate** = won ÷ (won + lost) among deals closed in the period. **Avg. sales cycle** = mean days from deal creation to close, deals won in the period.
+- **Lead conversion** (Reports) = leads created in the period that are now Won ÷ leads created in the period (cohort based).
+- **Funnel** = leads created in the period by furthest stage reached; Lost leads count only toward "Leads".
+- Pipeline "Won revenue" = Won deals closed this quarter. Tasks: Overdue = open and due before today.
+- Change indicators compare with the equally long previous period and are hidden for "All time"; empty periods show empty states or "—".
 
 ## Testing
 
-`scripts/e2e.cjs` drives the built app with Playwright and checks navigation, CRUD, validation, persistence
-after reload, drag-and-drop, filters, bulk actions, CSV import/export, settings, tasks and report consistency.
+```bash
+npm run server:test     # 14 API integration tests (needs a Postgres; uses database `northstar_test`)
+npm run e2e             # 90 browser checks: API on :3000 and `npm run build && npm run preview` on :4173 must be running
+```
+
+Create the test database once with `createdb northstar_test` (or set `TEST_DATABASE_URL`). The e2e script needs
+`playwright` installed and creates its own throwaway account each run; start the API with `AUTH_RATE_LIMIT=1000`
+if you run it repeatedly.
+
+## Not built yet (shown as "Not connected" / "Requires setup" in the UI)
+
+Email delivery (invitations, reminders, weekly summaries), third-party integrations (Google, Slack, Zapier, HubSpot),
+two-factor authentication, password-reset-by-email, billing, and translations. Adding a team member creates their
+account directly with an initial password the admin shares. Currency is formatting only (no conversion).

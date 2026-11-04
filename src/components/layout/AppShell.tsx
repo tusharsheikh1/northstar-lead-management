@@ -3,11 +3,13 @@ import { Link, Outlet, useLocation } from 'react-router-dom';
 import { Menu, FlaskConical } from 'lucide-react';
 import { Logo, SidebarContent } from './Sidebar';
 import { Drawer } from '../ui/Drawer';
+import { useStore } from '../../store/StoreContext';
 import { IconButton } from '../ui/Button';
 
 export function AppShell() {
   const [open, setOpen] = useState(false);
   const { pathname } = useLocation();
+  const { db } = useStore();
   useEffect(() => { document.getElementById('main')?.scrollTo({ top: 0 }); }, [pathname]);
   return (
     <div className="flex h-full">
@@ -20,12 +22,14 @@ export function AppShell() {
           <IconButton label="Open navigation menu" onClick={() => setOpen(true)} className="!h-10 !w-10"><Menu className="h-6 w-6" /></IconButton>
           <Logo />
         </div>
-        <div className="no-print flex flex-wrap items-center justify-center gap-x-2 bg-navy-900 px-4 py-1.5 text-center text-xs text-white/90" role="note">
-          <FlaskConical className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          <strong className="font-semibold">Demo workspace</strong>
-          <span className="hidden text-white/70 sm:inline">Sample data stored only in this browser. No backend is connected.</span>
-          <Link to="/settings?section=workspace" className="font-medium text-white underline underline-offset-2">Manage demo data</Link>
-        </div>
+        {db.settings.workspace.isDemo && (
+          <div className="no-print flex flex-wrap items-center justify-center gap-x-2 bg-navy-900 px-4 py-1.5 text-center text-xs text-white/90" role="note">
+            <FlaskConical className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <strong className="font-semibold">Sample data</strong>
+            <span className="hidden text-white/70 sm:inline">This workspace contains demo records, not real customers.</span>
+            <Link to="/settings?section=workspace" className="font-medium text-white underline underline-offset-2">Manage sample data</Link>
+          </div>
+        )}
         <main id="main" tabIndex={-1} className="app-main flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8 lg:py-7">
           <div className="mx-auto max-w-[1280px]"><Outlet /></div>
         </main>

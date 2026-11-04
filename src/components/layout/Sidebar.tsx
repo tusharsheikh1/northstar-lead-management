@@ -1,6 +1,7 @@
 import { NavLink, Link } from 'react-router-dom';
-import { BarChart3, ChevronDown, Home, Kanban, Settings, SquareCheckBig, Users, type LucideIcon } from 'lucide-react';
+import { BarChart3, Home, Kanban, LogOut, Settings, SquareCheckBig, Users, type LucideIcon } from 'lucide-react';
 import { useStore } from '../../store/StoreContext';
+import { useSession } from '../../store/SessionContext';
 import { Avatar } from '../ui/Avatar';
 
 export function Logo({ textClass = '' }: { textClass?: string }) {
@@ -23,6 +24,7 @@ const NAV: { to: string; label: string; icon: LucideIcon }[] = [
 /** `drawer` always shows labels; otherwise labels hide at tablet width (icon rail). */
 export function SidebarContent({ drawer = false, onNavigate }: { drawer?: boolean; onNavigate?: () => void }) {
   const { me } = useStore();
+  const { logout } = useSession();
   const label = drawer ? '' : 'hidden lg:inline';
   const item = (to: string, text: string, Icon: LucideIcon) => (
     <NavLink key={to} to={to} onClick={onNavigate} title={text}
@@ -49,8 +51,11 @@ export function SidebarContent({ drawer = false, onNavigate }: { drawer?: boolea
             <span className="block truncate text-sm font-semibold">{me.name}</span>
             <span className="block truncate text-[13px] text-ink-soft">{me.jobTitle}</span>
           </span>
-          <ChevronDown className={`h-4 w-4 text-ink-soft ${label}`} aria-hidden />
         </Link>
+        <button type="button" onClick={() => { onNavigate?.(); logout(); }} title="Sign out"
+          className={`mt-1 flex w-full items-center gap-3 rounded-xl px-3.5 py-2 text-sm font-medium text-ink-soft hover:bg-slate-100 hover:text-ink ${drawer ? '' : 'justify-center lg:justify-start'}`}>
+          <LogOut className="h-4 w-4 shrink-0" aria-hidden /><span className={label}>Sign out</span>
+        </button>
       </div>
     </div>
   );

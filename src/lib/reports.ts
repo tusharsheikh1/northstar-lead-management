@@ -104,7 +104,7 @@ export function reportCsv(db: Database, range: RangeKey, ownerId: string) {
   const owner = ownerId ? db.owners.find((o) => o.id === ownerId)?.name : 'All owners';
   const n = (v: number | null, d = 1) => (v === null ? 'n/a' : Number(v.toFixed(d)));
   return toCsv([
-    ['Northstar CRM report (demo workspace)'], ['Date range', rangeLabel(range)], ['Owner', owner], ['Generated', new Date().toISOString()], [],
+    ['Northstar CRM report'], ['Date range', rangeLabel(range)], ['Owner', owner], ['Generated', new Date().toISOString()], [],
     ['Metric', 'Value'],
     ['Total revenue (won deals closed in range)', r.cur.revenue], ['Deals won', r.cur.dealsWon],
     ['Lead conversion % (leads created in range that are now Won)', n(r.cur.conversion)], ['Average deal size', n(r.cur.avgDeal, 0)],

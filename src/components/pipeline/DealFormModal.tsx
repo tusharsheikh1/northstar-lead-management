@@ -34,7 +34,8 @@ export function DealFormModal({ deal, defaultStage, defaultLeadId, onClose }: { 
     setF((p) => ({ ...p, leadId: id, ...(l ? { company: l.company, title: `${l.company} - ${l.name.split(' ')[0]}`, value: p.value || String(l.value), ownerId: l.ownerId } : {}) }));
   };
 
-  const submit = (e: React.FormEvent) => {
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const err: Record<string, string> = {};
     if (!f.leadId) err.leadId = 'Choose the lead this deal belongs to.';
@@ -46,11 +47,14 @@ export function DealFormModal({ deal, defaultStage, defaultLeadId, onClose }: { 
     setErrors(err);
     if (Object.keys(err).length) return;
     const data = { leadId: f.leadId, title: f.title.trim(), company: f.company.trim(), value, stage: f.stage, ownerId: f.ownerId, priority: f.priority, expectedClose: new Date(`${f.close}T12:00:00`).toISOString() };
+    setBusy(true);
+    let saved: boolean;
     if (deal) {
-      const { stage, ...rest } = data;
-      if (isLost) store.updateDeal(deal.id, rest); else store.updateDeal(deal.id, { ...rest, stage });
-    } else store.addDeal(data);
-    onClose();
+      const { stage, leadId: _leadId, ...rest } = data;
+      saved = await store.updateDeal(deal.id, isLost ? rest : { ...rest, stage });
+    } else saved = !!(await store.addDeal(data));
+    setBusy(false);
+    if (saved) onClose();
   };
 
   if (confirmDelete && deal) {
@@ -64,7 +68,7 @@ export function DealFormModal({ deal, defaultStage, defaultLeadId, onClose }: { 
         {deal && !isLost && !lostOpen && <Button onClick={() => setLostOpen(true)}>Mark as lost</Button>}
         {deal && isLost && <Button onClick={() => { store.reopenDeal(deal.id); onClose(); }}>Reopen deal</Button>}
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="primary" type="submit" form="deal-form">{deal ? 'Save changes' : 'Add deal'}</Button>
+        <Button variant="primary" type="submit" form="deal-form" disabled={busy}>{deal ? 'Save changes' : 'Add deal'}</Button>
       </>}>
       {deal && (
         <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">

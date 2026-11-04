@@ -86,7 +86,7 @@ export default function Reports() {
           <Button icon={<Printer className="h-4 w-4" />} onClick={() => window.print()}>Print</Button>
           <Button variant="primary" icon={<Download className="h-4 w-4" />} onClick={() => downloadFile(`northstar-report-${range}.csv`, reportCsv(store.db, range, owner))}>Export CSV</Button>
         </>} />
-      <p className="print-only mb-4 text-sm text-ink-soft">{rangeLabel(range)} · {ownerName} · Demo workspace · Generated {fmt.dateTime(new Date())}</p>
+      <p className="print-only mb-4 text-sm text-ink-soft">{rangeLabel(range)} · {ownerName} · {store.db.settings.workspace.name} · Generated {fmt.dateTime(new Date())}</p>
 
       <div className="no-print"><Tabs label="Report sections" value={tab} onChange={setTab} tabs={[{ value: 'sales', label: 'Sales overview' }, { value: 'leads', label: 'Lead analytics' }, { value: 'team', label: 'Team performance' }]} /></div>
 

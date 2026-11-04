@@ -1,4 +1,4 @@
-import type { Activity, Database, Deal, Lead, LeadStatus, Note, Owner, Priority, Task } from '../types';
+import type { Activity, Database, Deal, Lead, LeadStatus, Note, Owner, Priority, Task } from '../../../src/types';
 
 export const DB_VERSION = 1;
 

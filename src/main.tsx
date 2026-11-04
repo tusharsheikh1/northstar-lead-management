@@ -3,16 +3,16 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import { ToastProvider } from './components/ui/Toast';
-import { StoreProvider } from './store/StoreContext';
+import { SessionProvider } from './store/SessionContext';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
       <ToastProvider>
-        <StoreProvider>
+        <SessionProvider>
           <App />
-        </StoreProvider>
+        </SessionProvider>
       </ToastProvider>
     </BrowserRouter>
   </React.StrictMode>,

@@ -18,7 +18,8 @@ export function TaskFormModal({ task, defaults, onClose }: { task?: Task; defaul
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((p) => ({ ...p, [k]: v }));
   const leadDeals = store.db.deals.filter((d) => d.leadId === f.leadId);
 
-  const submit = (e: React.FormEvent) => {
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const err: Record<string, string> = {};
     if (!f.title.trim()) err.title = 'Enter a task title.';
@@ -27,13 +28,15 @@ export function TaskFormModal({ task, defaults, onClose }: { task?: Task; defaul
     setErrors(err);
     if (Object.keys(err).length) return;
     const data = { title: f.title.trim(), ownerId: f.ownerId, priority: f.priority, dueAt: fromInputs(f.date, f.time || '09:00'), leadId: f.leadId || undefined, dealId: f.leadId && f.dealId ? f.dealId : undefined };
-    if (task) store.updateTask(task.id, data); else store.addTask(data);
-    onClose();
+    setBusy(true);
+    const saved = task ? await store.updateTask(task.id, data) : !!(await store.addTask(data));
+    setBusy(false);
+    if (saved) onClose();
   };
 
   return (
     <Modal title={task ? 'Edit task' : 'Add task'} onClose={onClose}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" type="submit" form="task-form">{task ? 'Save changes' : 'Add task'}</Button></>}>
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" type="submit" form="task-form" disabled={busy}>{task ? 'Save changes' : 'Add task'}</Button></>}>
       <form id="task-form" onSubmit={submit} noValidate className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Title" required error={errors.title} className="sm:col-span-2">{(p) => <Input {...p} data-autofocus value={f.title} onChange={(e) => set('title', e.target.value)} invalid={!!errors.title} />}</Field>
         <Field label="Due date" required error={errors.date}>{(p) => <Input {...p} type="date" value={f.date} onChange={(e) => set('date', e.target.value)} invalid={!!errors.date} />}</Field>

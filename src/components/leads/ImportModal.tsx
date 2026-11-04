@@ -96,7 +96,7 @@ export function ImportModal({ onClose }: { onClose: () => void }) {
         {step === 3 && <Button onClick={() => setStep(2)}>Back</Button>}
         <Button onClick={onClose}>Cancel</Button>
         {step === 2 && <Button variant="primary" disabled={missingRequired.length > 0} onClick={() => setStep(3)}>Validate</Button>}
-        {step === 3 && <Button variant="primary" disabled={!result.valid.length} onClick={() => { store.importLeads(result.valid); onClose(); }}>Import {result.valid.length} lead{result.valid.length === 1 ? '' : 's'}</Button>}
+        {step === 3 && <Button variant="primary" disabled={!result.valid.length} onClick={async () => { const n = await store.importLeads(result.valid); if (n !== undefined) onClose(); }}>Import {result.valid.length} lead{result.valid.length === 1 ? '' : 's'}</Button>}
       </>}>
       {step === 1 && (
         <div>

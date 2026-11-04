@@ -32,6 +32,7 @@ export const config = {
     sslSid: env('SSLWIRELESS_SID'),
     // Endpoint overrides exist mainly so tests can point at a local mock.
     urlOverride: env('SMS_API_URL'),
+    balanceUrlOverride: env('SMS_BALANCE_URL'),
   },
   scheduler: { enabled: env('DISABLE_SCHEDULER') !== 'true' },
   corsOrigin: process.env.CORS_ORIGIN || '',

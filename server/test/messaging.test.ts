@@ -402,17 +402,51 @@ describe('SMS gateways', () => {
     assert.equal((await status()).status, 'sent');
   });
 
+  it('maps BulkSMSBD error codes to clear messages and does not retry permanent ones', async () => {
+    const u = await signup('gateway-codes@example.com');
+    const id = await lead(u);
+    Object.assign(config.sms, { provider: 'bulksmsbd', apiKey: 'k', urlOverride: `http://127.0.0.1:${smsPort}/bulk` });
+    const cases: [number, RegExp, string][] = [
+      [1007, /1007: Insufficient balance/, 'failed'], [1002, /Sender ID not correct or disabled/, 'failed'], [1001, /Invalid number/, 'failed'],
+      [1032, /not whitelisted/, 'failed'], [1012, /Masking SMS must be sent in Bengali/, 'failed'], [1005, /Internal error/, 'queued'],
+    ];
+    for (const [code, re, expected] of cases) {
+      smsReply = () => ({ response_code: code });
+      await pool.query('DELETE FROM messages WHERE lead_id = $1', [id]);
+      await u.agent.post(`/api/leads/${id}/sms`).send({ message: 'hello' });
+      await dispatchQueued();
+      const r = (await pool.query('SELECT status, attempts, error FROM messages WHERE lead_id = $1', [id])).rows[0];
+      assert.match(r.error, re, String(code));
+      assert.equal(r.status, expected, `${code} status`);
+      assert.equal(r.attempts, 1, `${code} must not be retried straight away`);
+    }
+  });
+
+  it('reads the BulkSMSBD balance and says so when the gateway has no balance API', async () => {
+    const u = await signup('gateway-balance@example.com');
+    Object.assign(config.sms, { provider: 'bulksmsbd', apiKey: 'bal-key', urlOverride: `http://127.0.0.1:${smsPort}/bulk`, balanceUrlOverride: `http://127.0.0.1:${smsPort}/balance` });
+    smsReply = (c) => (c.path.startsWith('/balance') ? { balance: '123.45' } : { response_code: 202 });
+    // the mock reads GET query strings via the path
+    const r = await u.agent.get('/api/integrations/sms/balance');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.supported, true);
+    assert.match(r.body.raw, /123\.45/);
+    assert.ok(smsCalls.at(-1)!.path.includes('api_key=bal-key'));
+    Object.assign(config.sms, { provider: 'alphasms' });
+    assert.deepEqual((await u.agent.get('/api/integrations/sms/balance')).body, { supported: false });
+  });
+
   it('retries gateway failures with backoff, then marks the message failed', async () => {
     const u = await signup('gateway-fail@example.com');
     const id = await lead(u);
     Object.assign(config.sms, { provider: 'bulksmsbd', apiKey: 'k', urlOverride: `http://127.0.0.1:${smsPort}/bulk` });
-    smsReply = () => ({ response_code: 1007, error_message: 'Balance Insufficient' });
+    smsReply = () => ({ response_code: 1005, error_message: 'Balance Insufficient' });
     await u.agent.post(`/api/leads/${id}/sms`).send({ message: 'hello' });
     const row = () => pool.query(`SELECT status, attempts, error FROM messages WHERE lead_id = $1`, [id]).then((r) => r.rows[0]);
     await dispatchQueued();
     let r = await row();
     assert.equal(r.status, 'queued'); assert.equal(r.attempts, 1);
-    assert.match(r.error, /Balance Insufficient/);
+    assert.match(r.error, /1005: Internal error/);
     assert.equal(await dispatchQueued(), 0, 'not retried before the backoff elapses');
     await pool.query(`UPDATE messages SET next_attempt_at = now() WHERE lead_id = $1`, [id]);
     await dispatchQueued();
@@ -488,10 +522,10 @@ describe('channel configuration', () => {
     smsReply = () => ({ response_code: 202 });
     assert.equal((await u.agent.post('/api/integrations/sms/test').send({ to: '01712345678' })).body.status, 'sent');
     assert.equal((await u.agent.post('/api/integrations/sms/test').send({ to: '12345' })).status, 400);
-    smsReply = () => ({ response_code: 1002, error_message: 'Sender Id not correct' });
+    smsReply = () => ({ response_code: 1002 });
     const bad = await u.agent.post('/api/integrations/sms/test').send({ to: '01712345678' });
     assert.equal(bad.body.status, 'failed');
-    assert.match(bad.body.error, /Sender Id not correct/);
+    assert.match(bad.body.error, /Sender ID not correct or disabled/);
     const log = (await u.agent.get('/api/integrations/messages')).body.messages;
     assert.equal(log.length, 3);
     assert.ok(log.every((m: any) => !('body' in m)));

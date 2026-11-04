@@ -15,6 +15,32 @@ export function smsMode(): ChannelMode {
 }
 
 const TIMEOUT = 10_000;
+
+/** An error that retrying cannot fix (bad number, wrong sender ID, no balance...). The outbox marks these failed at once. */
+export class SmsError extends Error { constructor(message: string, public permanent = false) { super(message); } }
+
+// From the BulkSMSBD API documentation. `true` = permanent (do not retry).
+const BULKSMSBD_ERRORS: Record<number, [string, boolean]> = {
+  1001: ['Invalid number', true],
+  1002: ['Sender ID not correct or disabled', true],
+  1003: ['All fields are required / contact your system administrator', true],
+  1005: ['Internal error at the gateway', false],
+  1006: ['Balance validity not available (account expired)', true],
+  1007: ['Insufficient balance', true],
+  1011: ['User ID not found', true],
+  1012: ['Masking SMS must be sent in Bengali', true],
+  1013: ['Sender ID has no gateway for this API key', true],
+  1014: ['Sender type name not found for this API key', true],
+  1015: ['Sender ID has no valid gateway for this API key', true],
+  1016: ['No active price info for this sender ID', true],
+  1017: ['No price info for this sender ID', true],
+  1018: ['The owner of this account is disabled', true],
+  1019: ['The price of this account is disabled', true],
+  1020: ['The parent of this account was not found', true],
+  1021: ['The parent active price of this account was not found', true],
+  1031: ['Account not verified - contact the administrator', true],
+  1032: ['IP address is not whitelisted at BulkSMSBD', true],
+};
 async function readJson(res: Response) {
   const text = await res.text();
   try { return JSON.parse(text); } catch { throw new Error(`SMS gateway returned an unexpected response (HTTP ${res.status}).`); }
@@ -32,7 +58,12 @@ const adapters: Record<string, (to: string, text: string) => Promise<{ ref?: str
       body: new URLSearchParams({ api_key: config.sms.apiKey, type: 'text', number: to, senderid: config.sms.senderId, message: text }),
     });
     const j = await readJson(res);
-    if (Number(j.response_code) !== 202) throw new Error(`BulkSMSBD rejected the message: ${j.error_message || j.response_code || res.status}`);
+    const code = Number(j.response_code);
+    if (code !== 202) {
+      const known = BULKSMSBD_ERRORS[code];
+      if (known) throw new SmsError(`BulkSMSBD error ${code}: ${known[0]}.`, known[1]);
+      throw new SmsError(`BulkSMSBD rejected the message: ${j.error_message || j.response_code || `HTTP ${res.status}`}`, false);
+    }
     return { ref: j.message_id ? String(j.message_id) : undefined };
   },
   // https://sms.net.bd (Alpha SMS) - success when error === 0
@@ -69,4 +100,18 @@ export async function sendSms(rawTo: string, text: string): Promise<{ status: 's
   }
   const out = await adapters[config.sms.provider](to, text);
   return { status: 'sent', ref: out.ref };
+}
+
+/**
+ * Remaining credit, where the gateway offers an API for it (currently BulkSMSBD's getBalanceApi).
+ * The response format is not documented, so the raw reply is returned for display.
+ */
+export async function getSmsBalance(): Promise<{ supported: boolean; raw?: string }> {
+  if (smsMode() !== 'live' || config.sms.provider !== 'bulksmsbd') return { supported: false };
+  const url = new URL(config.sms.balanceUrlOverride || 'http://bulksmsbd.net/api/getBalanceApi');
+  url.searchParams.set('api_key', config.sms.apiKey);
+  const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT) });
+  const text = (await res.text()).trim().slice(0, 300);
+  if (!res.ok) throw new Error(`Balance check failed (HTTP ${res.status}).`);
+  return { supported: true, raw: text };
 }

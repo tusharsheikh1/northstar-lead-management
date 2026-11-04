@@ -6,7 +6,7 @@ import { ah, HttpError } from '../http.js';
 import { testEmailInput, testSmsInput } from '../validation.js';
 import { emailMode, sendEmail } from '../messaging/mailer.js';
 import { normalizeBdMobile, BD_PHONE_HINT } from '../messaging/phone.js';
-import { sendSms, smsMode } from '../messaging/sms.js';
+import { getSmsBalance, sendSms, smsMode } from '../messaging/sms.js';
 import { testEmail } from '../messaging/templates.js';
 
 export const integrations = Router();
@@ -45,6 +45,11 @@ integrations.post('/sms/test', ah<AuthedRequest>(async (req, res) => {
   if (!num) throw new HttpError(400, BD_PHONE_HINT, { to: BD_PHONE_HINT });
   const text = 'Northstar CRM test SMS. If you received this, SMS delivery works.';
   res.json(await record(req, 'sms', `+${num}`, null, text, () => sendSms(num, text)));
+}));
+
+integrations.get('/sms/balance', ah<AuthedRequest>(async (_req, res) => {
+  try { res.json(await getSmsBalance()); }
+  catch (e) { throw new HttpError(502, (e as Error).message); }
 }));
 
 integrations.get('/messages', ah<AuthedRequest>(async (req, res) => {

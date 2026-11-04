@@ -51,7 +51,8 @@ export async function dispatchQueued(limit = 25): Promise<number> {
       } catch (e) {
         const attempts = m.attempts + 1;
         const msg = (e as Error).message.slice(0, 500);
-        if (attempts >= MAX_ATTEMPTS) await client.query(`UPDATE messages SET status = 'failed', attempts = $2, error = $3 WHERE id = $1`, [m.id, attempts, msg]);
+        const permanent = (e as { permanent?: boolean }).permanent === true;
+        if (permanent || attempts >= MAX_ATTEMPTS) await client.query(`UPDATE messages SET status = 'failed', attempts = $2, error = $3 WHERE id = $1`, [m.id, attempts, msg]);
         else await client.query(`UPDATE messages SET attempts = $2, error = $3, next_attempt_at = now() + ($4 || ' minutes')::interval WHERE id = $1`, [m.id, attempts, msg, String(2 ** (attempts - 1) * 2)]);
       }
     }

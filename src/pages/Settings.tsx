@@ -352,13 +352,14 @@ function TestSendModal({ channel, onClose, onDone }: { channel: 'email' | 'sms';
   );
 }
 
-function ChannelCard({ icon, name, mode, details, setup, onTest }: { icon: React.ReactNode; name: string; mode: ChannelMode; details: string; setup: string[]; onTest: () => void }) {
+function ChannelCard({ icon, name, mode, details, setup, onTest, extra }: { icon: React.ReactNode; name: string; mode: ChannelMode; details: string; setup: string[]; onTest: () => void; extra?: React.ReactNode }) {
   return (
     <li className="py-4">
       <div className="flex flex-wrap items-center gap-3">
         <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-ink-soft">{icon}</span>
         <div className="min-w-0 flex-1"><p className="text-sm font-semibold">{name}</p><p className="text-[13px] text-ink-soft">{details}</p></div>
         <Badge tone={mode === 'live' ? 'success' : mode === 'log' ? 'warning' : 'neutral'}>{mode === 'live' ? 'Connected' : mode === 'log' ? 'Development mode' : 'Not connected'}</Badge>
+        {extra}
         <Button size="sm" icon={<Send className="h-3.5 w-3.5" />} disabled={mode === 'none'} onClick={onTest}>Send test</Button>
       </div>
       {mode === 'none' && (
@@ -397,6 +398,14 @@ function Integrations() {
   const [test, setTest] = useState<null | 'email' | 'sms'>(null);
   const [key, setKey] = useState(0);
   const [other, setOther] = useState<string | null>(null);
+  const [balance, setBalance] = useState<string | null>(null);
+  const checkBalance = async () => {
+    setBalance('Checking…');
+    try {
+      const r = await api.get<{ supported: boolean; raw?: string }>('/integrations/sms/balance');
+      setBalance(r.supported ? `Gateway reply: ${r.raw || '(empty)'}` : 'This gateway has no balance API in Northstar.');
+    } catch (ex) { setBalance(ex instanceof ApiError ? ex.message : 'Could not check the balance.'); }
+  };
   useEffect(() => { if (isAdmin) api.get<ChannelStatus>('/integrations/status').then(setStatus).catch(() => {}); }, [isAdmin]);
   const others = [
     { name: 'Google Workspace', desc: 'Sync Gmail and Calendar with leads and tasks.', needs: ['A Google OAuth client', 'Server code to store refresh tokens securely'] },
@@ -416,7 +425,9 @@ function Integrations() {
               setup={['SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS', 'MAIL_FROM="Northstar <no-reply@yourdomain.com>"', `APP_URL=${status.appUrl} (public address used in email links)`]} onTest={() => setTest('email')} />
             <ChannelCard icon={<MessageSquare className="h-5 w-5" />} name="SMS (Bangladesh)" mode={status.sms.mode}
               details={status.sms.mode === 'none' ? 'No SMS gateway configured.' : `Gateway: ${PROVIDER_NAMES[status.sms.provider ?? ''] ?? status.sms.provider}${status.sms.mode === 'log' ? ' — messages are only logged' : ''}`}
-              setup={['SMS_PROVIDER=bulksmsbd | alphasms | sslwireless', 'SMS_API_KEY=…  and  SMS_SENDER_ID=…', 'SSLWIRELESS_SID=…  (SSL Wireless only)']} onTest={() => setTest('sms')} />
+              setup={['SMS_PROVIDER=bulksmsbd | alphasms | sslwireless', 'SMS_API_KEY=…  and  SMS_SENDER_ID=…', 'SSLWIRELESS_SID=…  (SSL Wireless only)']} onTest={() => setTest('sms')}
+              extra={status.sms.mode === 'live' && status.sms.provider === 'bulksmsbd' ? <Button size="sm" onClick={checkBalance}>Check balance</Button> : undefined} />
+            {balance && <li className="py-3 text-[13px] text-ink-soft" role="status">{balance}</li>}
           </ul>)}
       </SectionCard>
       {isAdmin && <><div className="mt-5" /><SectionCard title="Message log" description="The latest 30 messages sent or attempted from this workspace."><MessageLog refreshKey={key} /></SectionCard></>}

@@ -140,6 +140,12 @@ Set the `SMTP_*`, `MAIL_FROM` and `APP_URL` variables, then use *Settings → In
 Numbers are validated and normalised to `8801XXXXXXXXX` (operators 013–019); anything else is refused rather than sent. Text over 480 characters is
 rejected, and Bangla (Unicode) messages use 70-character segments, which the send dialog explains.
 
+**BulkSMSBD specifics** (from their API docs): you need your API key and an *approved* sender ID. Their error codes are mapped to plain
+messages (e.g. 1007 insufficient balance, 1002 sender ID wrong or disabled, 1032 IP not whitelisted), and permanent errors are not retried.
+*Settings → Integrations → Check balance* calls their `getBalanceApi` and shows the raw reply. Masked (brand-name) sender IDs may only send
+Bengali text (code 1012), and if your account uses IP whitelisting, add the server's public IP in their panel. Keep the key in
+`server/.env` (git-ignored) and never commit it.
+
 > **Verify before relying on it.** The three gateway adapters follow each provider's published HTTP API and are tested against
 > local mock servers that imitate those APIs, **not against live accounts**. Before going live, send a real test SMS from
 > *Settings → Integrations* with your own account and sender ID, and check each gateway's current docs, sender-ID/masking approval

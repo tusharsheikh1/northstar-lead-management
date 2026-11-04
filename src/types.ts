@@ -24,6 +24,7 @@ export interface Owner {
   color: string; // avatar tint
   photo?: string; // data URL
   canSignIn?: boolean; // false for sample members without a login
+  phone?: string;
 }
 
 export interface Lead {
@@ -37,6 +38,7 @@ export interface Lead {
   source: LeadSource;
   value: number;
   notes: string;
+  doNotContact?: boolean;
   createdAt: string;
   updatedAt: string;
   lastActivityAt: string;
@@ -101,11 +103,15 @@ export interface Settings {
     timeZone: string;
     dateFormat: string;
     monthlyTarget: number;
+    reminderLeadMinutes?: number;
     isDemo?: boolean; // workspace currently holds sample data
   };
   probabilities: Record<BoardStage, number>; // percent 0-100
-  notifications: { emailUpdates: boolean; taskReminders: boolean; weeklySummary: boolean };
+  notifications: { emailUpdates: boolean; taskReminders: boolean; weeklySummary: boolean; smsReminders?: boolean };
+  /** How each outgoing channel is set up on the server: live = real delivery, log = dev only (not delivered), none = off. */
+  channels?: { email: ChannelMode; sms: ChannelMode };
 }
+export type ChannelMode = 'live' | 'log' | 'none';
 
 export interface Database {
   version: number;

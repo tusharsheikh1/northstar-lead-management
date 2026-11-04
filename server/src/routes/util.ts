@@ -3,11 +3,13 @@ import { withTransaction } from '../db.js';
 import { ah, HttpError, notFound } from '../http.js';
 import type { AuthedRequest } from '../auth.js';
 import { snapshot } from '../snapshot.js';
+import { dispatchSoon } from '../messaging/outbox.js';
 
 /** Runs `fn` in a transaction, then responds with `{ result, data }` where data is the fresh workspace snapshot. */
 export function mutation<T>(fn: (c: Client, req: AuthedRequest) => Promise<T>, status = 200) {
   return ah<AuthedRequest>(async (req, res) => {
     const result = await withTransaction((c) => fn(c, req));
+    dispatchSoon();
     const data = await snapshot(req.auth.workspaceId, req.auth.userId);
     res.status(status).json({ result, data });
   });

@@ -8,6 +8,7 @@ interface Session {
   state: State;
   login: (email: string, password: string) => Promise<void>;
   register: (input: { name: string; email: string; password: string; workspaceName: string; sampleData: boolean }) => Promise<void>;
+  acceptInvite: (input: { token: string; name: string; password: string }) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -35,11 +36,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const r = await api.post<{ data: Database }>('/auth/register', input);
     setState({ status: 'authed', initial: r.data });
   }, []);
+  const acceptInvite = useCallback(async (input: { token: string; name: string; password: string }) => {
+    const r = await api.post<{ data: Database }>('/auth/accept-invite', input);
+    setState({ status: 'authed', initial: r.data });
+  }, []);
   const logout = useCallback(async () => {
     await api.post('/auth/logout').catch(() => {});
     setState({ status: 'anon' });
   }, []);
 
-  const value = useMemo(() => ({ state, login, register, logout }), [state, login, register, logout]);
+  const value = useMemo(() => ({ state, login, register, acceptInvite, logout }), [state, login, register, acceptInvite, logout]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

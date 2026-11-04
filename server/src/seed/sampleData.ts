@@ -141,7 +141,7 @@ export function buildSeed(now = new Date()): Database {
     leads.push({
       id, name, company, status, source, value, ownerId, createdAt, lastActivityAt,
       updatedAt: lastActivityAt,
-      email: `${first}@${slug(company)}.com`,
+      email: `${first}@${slug(company)}.example`, // reserved TLD: sample leads can never receive real email
       phone: `+1 (555) 01${String(10 + ((i * 7) % 90)).padStart(2, '0')}-${String(1000 + ((i * 137) % 9000))}`,
       notes: LEAD_NOTES[i % LEAD_NOTES.length],
     });

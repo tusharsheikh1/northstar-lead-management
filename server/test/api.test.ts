@@ -240,7 +240,7 @@ describe('workspace, profile and sample data', () => {
     assert.equal(prof.body.data.owners[0].name, 'Test User');
     assert.equal((await agent.patch('/api/me').send({ photo: 'http://evil.example/x.png' })).status, 400);
     const n = await agent.patch('/api/me/notifications').send({ weeklySummary: true });
-    assert.deepEqual(n.body.data.settings.notifications, { emailUpdates: true, taskReminders: true, weeklySummary: true });
+    assert.deepEqual(n.body.data.settings.notifications, { emailUpdates: true, taskReminders: true, weeklySummary: true, smsReminders: false });
   });
 
   it('can reset to sample data and clear all data', async () => {

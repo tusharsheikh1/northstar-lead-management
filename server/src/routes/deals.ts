@@ -3,6 +3,7 @@ import { requireWrite } from '../auth.js';
 import { dealInput, dealPatch, lostInput, reopenInput, stageInput } from '../validation.js';
 import { assertMember, buildSet, getDeal, getLead, mutation } from './util.js';
 import { logActivity, touchLead } from '../activity.js';
+import { notifyAssigned, notifyDealClosed } from '../messaging/notify.js';
 
 export const deals = Router();
 deals.use(requireWrite);
@@ -21,6 +22,7 @@ deals.post('/', mutation(async (c, req) => {
   );
   await touchLead(c, workspaceId, d.leadId, d.stage);
   await logActivity(c, { workspaceId, actorId: userId, verb: 'created a deal for', subject: d.company, dealId: r.rows[0].id, leadId: d.leadId });
+  await notifyAssigned(c, { workspaceId, actorId: userId, userId: d.ownerId, what: 'deal', title: `${d.company} - ${d.title}`, path: `/pipeline?deal=${r.rows[0].id}` });
   return { id: r.rows[0].id };
 }, 201));
 
@@ -38,6 +40,8 @@ deals.patch('/:id', mutation(async (c, req) => {
   }
   if (sets.length) await c.query(`UPDATE deals SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 AND workspace_id = $2`, [prev.id, workspaceId, ...values]);
   if (stageChanged) await touchLead(c, workspaceId, prev.lead_id, patch.stage);
+  if (patch.ownerId && patch.ownerId !== prev.owner_id) await notifyAssigned(c, { workspaceId, actorId: userId, userId: patch.ownerId, what: 'deal', title: `${prev.company} - ${patch.title ?? prev.title}`, path: `/pipeline?deal=${prev.id}` });
+  if (stageChanged && patch.stage === 'Won') await notifyDealClosed(c, { workspaceId, actorId: userId, dealId: prev.id, outcome: 'won' });
   await logActivity(c, {
     workspaceId, actorId: userId, subject: prev.company, dealId: prev.id, leadId: prev.lead_id,
     ...(stageChanged ? { verb: patch.stage === 'Won' ? 'closed' : 'moved', detail: patch.stage === 'Won' ? 'as won' : `to ${patch.stage}` } : { verb: 'updated the deal for' }),
@@ -52,6 +56,7 @@ deals.post('/:id/move', mutation(async (c, req) => {
   if (prev.stage === stage) return { id: prev.id };
   await c.query(`UPDATE deals SET stage = $3, updated_at = now(), lost_reason = NULL, closed_at = CASE WHEN $3 = 'Won' THEN now() END WHERE id = $1 AND workspace_id = $2`, [prev.id, workspaceId, stage]);
   await touchLead(c, workspaceId, prev.lead_id, stage);
+  if (stage === 'Won') await notifyDealClosed(c, { workspaceId, actorId: userId, dealId: prev.id, outcome: 'won' });
   await logActivity(c, { workspaceId, actorId: userId, verb: stage === 'Won' ? 'closed' : 'moved', subject: prev.company, detail: stage === 'Won' ? 'as won' : `to ${stage}`, dealId: prev.id, leadId: prev.lead_id });
   return { id: prev.id };
 }));
@@ -62,6 +67,7 @@ deals.post('/:id/lost', mutation(async (c, req) => {
   const prev = await getDeal(c, workspaceId, req.params.id);
   await c.query(`UPDATE deals SET stage = 'Lost', lost_reason = $3, closed_at = now(), updated_at = now() WHERE id = $1 AND workspace_id = $2`, [prev.id, workspaceId, reason]);
   await touchLead(c, workspaceId, prev.lead_id, 'Lost');
+  await notifyDealClosed(c, { workspaceId, actorId: userId, dealId: prev.id, outcome: 'lost' });
   await logActivity(c, { workspaceId, actorId: userId, verb: 'lost', subject: prev.company, detail: 'deal', dealId: prev.id, leadId: prev.lead_id });
   return { id: prev.id };
 }));

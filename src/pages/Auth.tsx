@@ -52,6 +52,7 @@ export default function Auth({ mode }: { mode: 'login' | 'register' }) {
           {!isLogin && <Field label="Your name" required error={errors.name}>{(p) => <Input {...p} data-autofocus autoComplete="name" value={f.name} onChange={(e) => set('name', e.target.value)} invalid={!!errors.name} />}</Field>}
           <Field label="Email" required error={errors.email}>{(p) => <Input {...p} type="email" autoComplete="email" value={f.email} onChange={(e) => set('email', e.target.value)} invalid={!!errors.email} />}</Field>
           <Field label="Password" required error={errors.password} hint={isLogin ? undefined : 'At least 8 characters.'}>{(p) => <Input {...p} type="password" autoComplete={isLogin ? 'current-password' : 'new-password'} value={f.password} onChange={(e) => set('password', e.target.value)} invalid={!!errors.password} />}</Field>
+          {isLogin && <div className="-mt-2 text-right"><Link to="/forgot-password" className="text-[13px] font-medium text-primary-600 hover:underline">Forgot password?</Link></div>}
           {!isLogin && <>
             <Field label="Workspace name" required error={errors.workspaceName}>{(p) => <Input {...p} value={f.workspaceName} onChange={(e) => set('workspaceName', e.target.value)} invalid={!!errors.workspaceName} placeholder="Acme Sales" />}</Field>
             <label className="flex items-start gap-3 rounded-lg bg-slate-50 p-3 text-sm">

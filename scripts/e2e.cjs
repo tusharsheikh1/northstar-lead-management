@@ -1,5 +1,7 @@
 // End-to-end test of the full stack. Usage:
-//   (cd server && npm run dev) &            # API on :3000 with a migrated Postgres
+//   npm run sink &                          # local SMTP (:1025) + SMS gateway (:1026) that record messages
+//   (cd server && SMTP_HOST=127.0.0.1 SMTP_PORT=1025 APP_URL=http://127.0.0.1:4173 SMS_PROVIDER=bulksmsbd \
+//      SMS_API_KEY=dev SMS_SENDER_ID=NSTAR SMS_API_URL=http://127.0.0.1:1026/sms AUTH_RATE_LIMIT=1000 npm run dev) &
 //   npm run build && npm run preview &      # frontend on :4173, proxies /api to :3000
 //   npm i -D playwright && node scripts/e2e.cjs
 const { chromium } = require('playwright');
@@ -86,10 +88,10 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok  ', m); } else { fail+
   ok(await p.getByText('Enter the lead’s name.').isVisible(), 'validation: name required');
   await p.getByLabel('Full name').fill('Zed Tester');
   await p.getByLabel('Company', { exact: false }).first().fill('Testco');
-  await p.getByLabel('Email').fill('bad-email');
+  await p.getByLabel('Email', { exact: true }).fill('bad-email');
   await p.getByRole('button', { name: 'Add lead' }).last().click();
   ok(await p.getByText(/valid email/).isVisible(), 'validation: bad email');
-  await p.getByLabel('Email').fill('zed@testco.com');
+  await p.getByLabel('Email', { exact: true }).fill('zed@testco.com');
   await p.getByLabel('Estimated value').fill('4321');
   await p.getByRole('button', { name: 'Add lead' }).last().click();
   ok((await toastText()).includes('Zed Tester added'), 'toast: lead added');
@@ -155,7 +157,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok  ', m); } else { fail+
   console.log('CSV import');
   await p.goto(BASE + '/leads');
   await p.getByRole('button', { name: 'Import' }).click(); const dlg = p.getByRole('dialog');
-  fs.writeFileSync(TMP + '/import.csv', 'Full Name,Org,E-mail,Amount,Stage\nAnn Import,Importco,ann@importco.com,5000,Qualified\n,NoName,x@y.com,1,New\nBob Bad,Badco,not-an-email,10,New\nCy Dup,Dupco,olivia@acmeinc.com,10,New\n"Dee, Quoted",Quoteco,dee@quoteco.com,"$1,200",Weird\n');
+  fs.writeFileSync(TMP + '/import.csv', 'Full Name,Org,E-mail,Amount,Stage\nAnn Import,Importco,ann@importco.com,5000,Qualified\n,NoName,x@y.com,1,New\nBob Bad,Badco,not-an-email,10,New\nCy Dup,Dupco,olivia@acmeinc.example,10,New\n"Dee, Quoted",Quoteco,dee@quoteco.com,"$1,200",Weird\n');
   await p.getByLabel('CSV file').setInputFiles(TMP + '/import.csv');
   await p.getByText('Match each Northstar field').waitFor(); ok(true, 'mapping step shown');
   await dlg.locator('#map-company').selectOption({ label: 'Org' });
@@ -322,7 +324,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok  ', m); } else { fail+
   await p.waitForTimeout(400);
   ok((await toastText()).includes('Password changed'), 'password changed');
   await p.goto(BASE + '/settings?section=team');
-  await p.getByRole('button', { name: 'Add member' }).click();
+  await p.getByRole('button', { name: 'Add with password' }).click();
   await p.getByRole('dialog').getByLabel('Full name').fill('Vic Viewer');
   await p.getByRole('dialog').getByLabel('Email').fill(`vic.${stamp}@example.com`);
   await p.getByRole('dialog').getByLabel('Role').selectOption('Viewer');
@@ -370,6 +372,169 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ok  ', m); } else { fail+
   await p.getByLabel('Password').fill('newpassword9');
   await p.getByRole('button', { name: 'Sign in' }).click();
   await p.waitForSelector('aside');
+
+  console.log('Email + SMS');
+  const SINK = 'http://127.0.0.1:1027';
+  const sink = async () => (await fetch(SINK)).json();
+  const until = async (fn, ms = 20000) => { const t = Date.now(); while (Date.now() - t < ms) { const v = await fn(); if (v) return v; await p.waitForTimeout(250); } return null; };
+  await fetch(SINK + '/reset', { method: 'DELETE' });
+
+  // Profile phone -> SMS reminders toggle
+  await p.goto(BASE + '/settings?section=notifications');
+  ok(await p.getByRole('switch', { name: 'Task reminders (SMS)' }).isDisabled(), 'SMS reminders are disabled until a mobile number is set');
+  await p.goto(BASE + '/settings?section=profile');
+  await p.getByLabel('Mobile number').fill('+14155552671');
+  ok((await p.locator('main').innerText()).includes('Not a Bangladeshi mobile number'), 'non-BD number is flagged');
+  await p.getByLabel('Mobile number').fill('01712-345678');
+  ok((await p.locator('main').innerText()).includes('+880 1712-345678'), 'BD number normalised in the hint');
+  await p.getByRole('button', { name: 'Save profile' }).click();
+  await p.goto(BASE + '/settings?section=notifications');
+  await p.getByRole('switch', { name: 'Task reminders (SMS)' }).click();
+  ok(await p.getByRole('switch', { name: 'Task reminders (SMS)' }).getAttribute('aria-checked') === 'true', 'SMS reminders can be enabled with a BD number');
+  ok((await p.locator('main').innerText()).includes('Email delivery is set up on this server'), 'notifications page shows live email status');
+
+  // Integrations: live status, test sends, message log
+  await p.goto(BASE + '/settings?section=integrations');
+  await p.getByText('Email (SMTP)').waitFor();
+  ok((await p.getByText('Connected', { exact: true }).count()) === 2, 'email and SMS show as Connected');
+  await p.getByRole('button', { name: 'Send test' }).first().click();
+  await p.getByRole('dialog').getByRole('textbox').fill('bad');
+  await p.getByRole('dialog').getByRole('button', { name: 'Send test' }).click();
+  ok(await p.getByText('Enter a valid email address.').isVisible(), 'test email validation');
+  await p.getByRole('dialog').getByRole('textbox').fill('tester@example.com');
+  await p.getByRole('dialog').getByRole('button', { name: 'Send test' }).click();
+  ok(await p.getByRole('dialog').getByText(/accepted/).isVisible(), 'test email accepted by SMTP server');
+  await p.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  ok(!!(await until(async () => (await sink()).emails.find((m) => m.subject === 'Northstar test email'))), 'test email really arrived at the SMTP server');
+  await p.getByRole('button', { name: 'Send test' }).last().click();
+  await p.getByRole('dialog').getByRole('textbox').fill('12345');
+  await p.getByRole('dialog').getByRole('button', { name: 'Send test' }).click();
+  ok((await p.getByRole('dialog').innerText()).includes('Bangladeshi mobile'), 'SMS test rejects non-BD number');
+  await p.getByRole('dialog').getByRole('textbox').fill('01912345678');
+  await p.getByRole('dialog').getByRole('button', { name: 'Send test' }).click();
+  ok(await p.getByRole('dialog').getByText(/accepted/).isVisible(), 'test SMS accepted by gateway');
+  await p.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  ok((await sink()).sms.some((s) => s.number === '8801912345678'), 'test SMS reached the gateway with normalised number');
+  ok((await p.getByText('Message log').isVisible()) && (await p.locator('table tbody tr').count()) >= 2, 'message log lists sent messages');
+
+  // Messaging a lead
+  await p.goto(BASE + '/leads');
+  await p.getByRole('button', { name: 'Add lead' }).first().click();
+  await p.getByLabel('Full name').fill('Sms Target');
+  await p.getByLabel('Company', { exact: false }).first().fill('Dhaka Co');
+  await p.getByLabel('Email', { exact: true }).fill('sms.target@dhakaco.example');
+  await p.getByLabel('Phone').fill('01712-345678');
+  await p.getByRole('button', { name: 'Add lead' }).last().click();
+  await p.getByPlaceholder('Search leads').fill('Sms Target');
+  await p.getByRole('button', { name: 'Sms Target', exact: true }).click();
+  await p.getByRole('button', { name: 'SMS', exact: true }).click();
+  await p.getByRole('dialog').last().getByRole('button', { name: 'Send SMS' }).last().click();
+  ok(await p.getByText('Enter a message.').isVisible(), 'SMS message required');
+  await p.getByRole('dialog').last().getByLabel('Message').fill('Assalamu alaikum, আপনার ডেমো নিশ্চিত হয়েছে।');
+  ok((await p.getByRole('dialog').last().innerText()).includes('Unicode'), 'SMS dialog explains Bangla segment length');
+  await p.getByRole('dialog').last().getByRole('button', { name: 'Send SMS' }).last().click();
+  ok(!!(await until(async () => (await sink()).sms.find((s) => s.number === '8801712345678' && s.message.includes('ডেমো')))), 'SMS to lead delivered to gateway with Bangla text intact');
+  ok(!!(await until(async () => (await p.getByText('Sent', { exact: true }).count()) > 0)), 'message history shows Sent');
+  await p.getByRole('button', { name: 'Email', exact: true }).click();
+  await p.getByRole('dialog').last().getByLabel('Subject').fill('Your demo is booked');
+  await p.getByRole('dialog').last().getByLabel('Message').fill('Hi, see you Sunday.');
+  await p.getByRole('dialog').last().getByRole('button', { name: 'Send email' }).click();
+  ok(!!(await until(async () => (await sink()).emails.find((m) => m.to.includes('sms.target@dhakaco.example') && m.subject === 'Your demo is booked'))), 'email to lead delivered over SMTP');
+  await p.keyboard.press('Escape');
+  // do-not-contact blocks both channels
+  await p.getByRole('button', { name: 'Edit Sms Target' }).click();
+  await p.getByLabel('Do not contact').check();
+  await p.getByRole('button', { name: 'Save changes' }).click();
+  await p.getByRole('button', { name: 'Sms Target', exact: true }).click();
+  ok(await p.getByRole('button', { name: 'SMS', exact: true }).isDisabled() && await p.getByRole('button', { name: 'Email', exact: true }).isDisabled(), 'do-not-contact disables email and SMS');
+  await p.keyboard.press('Escape');
+  // a sample lead (non-BD number) cannot be texted
+  await p.getByPlaceholder('Search leads').fill('Olivia');
+  await p.getByRole('button', { name: 'Olivia Rhye', exact: true }).click();
+  ok(await p.getByRole('button', { name: 'SMS', exact: true }).isDisabled(), 'SMS disabled for a non-Bangladeshi number');
+  await p.keyboard.press('Escape');
+
+  // Invitations
+  await p.goto(BASE + '/settings?section=team');
+  await p.getByRole('button', { name: 'Invite by email' }).click();
+  await p.getByRole('dialog').getByRole('button', { name: 'Create invitation' }).click();
+  ok(await p.getByText('Enter a valid email address.').isVisible(), 'invite validation');
+  await p.getByRole('dialog').getByLabel('Email').fill(`invitee.${stamp}@example.com`);
+  await p.getByRole('dialog').getByLabel('Role').selectOption('Manager');
+  await p.getByRole('dialog').getByRole('button', { name: 'Create invitation' }).click();
+  ok(await p.getByRole('dialog').getByText(/on its way/).isVisible(), 'invite reports the email is on its way');
+  const inviteLink = await p.getByRole('dialog').locator('input[readonly]').inputValue();
+  await p.getByRole('dialog').getByRole('button', { name: 'Done' }).click();
+  ok((await p.locator('main').innerText()).includes(`invitee.${stamp}@example.com`), 'pending invitation listed');
+  const invMail = await until(async () => (await sink()).emails.find((m) => m.to.includes(`invitee.${stamp}@example.com`)));
+  ok(!!invMail && invMail.text.includes(inviteLink), 'invitation email contains the same link');
+  const ctx2 = await b.newContext({ viewport: { width: 1280, height: 800 } });
+  const q = await ctx2.newPage();
+  await q.goto(inviteLink);
+  await q.getByText(/invited you as Manager/).waitFor();
+  ok(true, 'invite page shows workspace and role');
+  await q.getByRole('button', { name: 'Accept invitation' }).click();
+  ok(await q.getByText('Enter your name.').isVisible(), 'accept validation');
+  await q.getByLabel('Your name').fill('Invited Person');
+  await q.getByLabel('Choose a password').fill('invitedpass1');
+  await q.getByRole('button', { name: 'Accept invitation' }).click();
+  await q.waitForSelector('aside');
+  ok((await q.locator('aside').innerText()).includes('Invited Person'), 'invited user joined and is signed in');
+  const ctx2b = await b.newContext();
+  const q2 = await ctx2b.newPage();
+  await q2.goto(inviteLink);
+  await q2.getByText('Invitation not valid').waitFor();
+  ok(true, 'invitation link is single use');
+  await ctx2.close(); await ctx2b.close();
+
+  // Password reset by email
+  const ctx3 = await b.newContext({ viewport: { width: 1280, height: 800 } });
+  const r = await ctx3.newPage();
+  await r.goto(BASE + '/login');
+  await r.getByRole('link', { name: 'Forgot password?' }).click();
+  await r.getByLabel('Email').fill('nobody@example.com');
+  await r.getByRole('button', { name: 'Send reset link' }).click();
+  ok(await r.getByText('Check your email').isVisible(), 'unknown email gets the same neutral answer');
+  await fetch(SINK + '/reset', { method: 'DELETE' });
+  await r.goto(BASE + '/forgot-password');
+  await r.getByLabel('Email').fill(NEW_EMAIL);
+  await r.getByRole('button', { name: 'Send reset link' }).click();
+  ok(await r.getByText('Check your email').isVisible(), 'reset requested');
+  const resetMail = await until(async () => (await sink()).emails.find((m) => m.to.includes(NEW_EMAIL) && /Reset your/.test(m.subject)));
+  ok(!!resetMail, 'reset email arrived');
+  const resetUrl = resetMail.text.match(/http:\/\/[^\s]+reset-password\?token=[A-Za-z0-9_-]+/)[0];
+  await r.goto(resetUrl);
+  await r.getByLabel(/^New password/).fill('resetpass99');
+  await r.getByLabel(/^Confirm new password/).fill('different99');
+  await r.getByRole('button', { name: 'Update password' }).click();
+  ok(await r.getByText('Passwords do not match.').isVisible(), 'reset confirm mismatch');
+  await r.getByLabel(/^Confirm new password/).fill('resetpass99');
+  await r.getByRole('button', { name: 'Update password' }).click();
+  ok(await r.getByText('Password updated').isVisible(), 'password reset done');
+  await r.getByRole('button', { name: 'Go to sign in' }).click();
+  await r.getByLabel('Email').fill(NEW_EMAIL);
+  await r.getByLabel('Password').fill('resetpass99');
+  await r.getByRole('button', { name: 'Sign in' }).click();
+  await r.waitForSelector('aside');
+  ok(true, 'can sign in with the reset password');
+  await r.goto(resetUrl);
+  await r.getByLabel(/^New password/).fill('another-pass1');
+  await r.getByLabel(/^Confirm new password/).fill('another-pass1');
+  await r.getByRole('button', { name: 'Update password' }).click();
+  ok(await r.getByText(/invalid or has expired/).isVisible(), 'reset link cannot be reused');
+  await ctx3.close();
+
+  // Task reminder by the real background scheduler (runs once a minute)
+  console.log('  ... waiting for the scheduler to send a task reminder (up to ~70s)');
+  await fetch(SINK + '/reset', { method: 'DELETE' });
+  await p.evaluate(async () => {
+    const d = (await (await fetch('/api/data')).json()).data;
+    await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'E2E reminder task', ownerId: d.settings.currentUserId, dueAt: new Date(Date.now() + 10 * 60_000).toISOString(), priority: 'High' }) });
+  });
+  const remEmail = await until(async () => (await sink()).emails.find((m) => /Reminder: E2E reminder task/.test(m.subject)), 75000);
+  ok(!!remEmail, 'scheduler sent the task reminder email');
+  const remSms = await until(async () => (await sink()).sms.find((s) => /E2E reminder task/.test(s.message)), 10000);
+  ok(!!remSms && remSms.number === '8801712345678', 'scheduler sent the task reminder SMS to the profile number');
 
   console.log('Replace / clear data');
   await p.goto(BASE + '/settings?section=workspace');

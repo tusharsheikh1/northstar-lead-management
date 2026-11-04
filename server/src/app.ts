@@ -14,6 +14,8 @@ import { leads } from './routes/leads.js';
 import { deals } from './routes/deals.js';
 import { tasks } from './routes/tasks.js';
 import { account } from './routes/account.js';
+import { invitations } from './routes/invitations.js';
+import { integrations } from './routes/integrations.js';
 
 export function createApp() {
   const app = express();
@@ -40,6 +42,8 @@ export function createApp() {
   api.use('/leads', requireAuth, leads);
   api.use('/deals', requireAuth, deals);
   api.use('/tasks', requireAuth, tasks);
+  api.use('/invitations', requireAuth, invitations);
+  api.use('/integrations', requireAuth, integrations);
   api.use('/', requireAuth, account);
   api.use((_req, res) => { res.status(404).json({ error: 'Not found.' }); });
   app.use('/api', api);

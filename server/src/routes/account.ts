@@ -5,19 +5,28 @@ import { HttpError } from '../http.js';
 import { memberInput, notificationsPatch, profilePatch, rolePatch, workspacePatch } from '../validation.js';
 import { buildSet, mutation } from './util.js';
 import { loadSampleData } from '../seed/load.js';
+import { BD_PHONE_HINT, normalizeBdMobile } from '../messaging/phone.js';
 
 export const account = Router();
 
 // Own profile - any role may edit their own profile and preferences.
 account.patch('/me', mutation(async (c, req) => {
   const p = profilePatch.parse(req.body);
-  const { sets, values } = buildSet(p, { name: 'name', email: 'email', jobTitle: 'job_title', photo: 'photo' }, 2);
+  const { sets, values } = buildSet(p, { name: 'name', email: 'email', jobTitle: 'job_title', photo: 'photo', phone: 'phone' }, 2);
   if (sets.length) await c.query(`UPDATE users SET ${sets.join(', ')} WHERE id = $1`, [req.auth.userId, ...values]);
+  // SMS reminders only work with a valid Bangladeshi mobile number, so switch them off if the number stops being one.
+  if (p.phone !== undefined && !normalizeBdMobile(p.phone)) {
+    await c.query(`UPDATE users SET notifications = notifications || '{"smsReminders":false}'::jsonb WHERE id = $1`, [req.auth.userId]);
+  }
   return { ok: true };
 }));
 
 account.patch('/me/notifications', mutation(async (c, req) => {
   const p = notificationsPatch.parse(req.body);
+  if (p.smsReminders) {
+    const phone = (await c.query('SELECT phone FROM users WHERE id = $1', [req.auth.userId])).rows[0]?.phone;
+    if (!normalizeBdMobile(phone)) throw new HttpError(400, `Add a valid mobile number to your profile first. ${BD_PHONE_HINT}`, { smsReminders: BD_PHONE_HINT });
+  }
   await c.query('UPDATE users SET notifications = notifications || $2::jsonb WHERE id = $1', [req.auth.userId, JSON.stringify(p)]);
   return { ok: true };
 }));
@@ -45,7 +54,7 @@ account.patch('/users/:id/role', requireAdmin, mutation(async (c, req) => {
 // Workspace settings - admins only.
 account.patch('/workspace', requireAdmin, mutation(async (c, req) => {
   const { probabilities, ...rest } = workspacePatch.parse(req.body);
-  const { sets, values } = buildSet(rest, { name: 'name', currency: 'currency', language: 'language', timeZone: 'time_zone', dateFormat: 'date_format', monthlyTarget: 'monthly_target' }, 2);
+  const { sets, values } = buildSet(rest, { name: 'name', currency: 'currency', language: 'language', timeZone: 'time_zone', dateFormat: 'date_format', monthlyTarget: 'monthly_target', reminderLeadMinutes: 'reminder_lead_minutes' }, 2);
   if (probabilities) { values.push(JSON.stringify(probabilities)); sets.push(`probabilities = probabilities || $${values.length + 1}::jsonb`); }
   if (sets.length) await c.query(`UPDATE workspaces SET ${sets.join(', ')} WHERE id = $1`, [req.auth.workspaceId, ...values]);
   return { ok: true };

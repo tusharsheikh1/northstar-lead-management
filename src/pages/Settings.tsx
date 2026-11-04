@@ -1,13 +1,17 @@
 import { useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Bell, Building2, CreditCard, Database as DatabaseIcon, Download, Lock, LogOut, Plug, RotateCcw, ShieldCheck, Trash2, Upload, UserPlus, User, Users2, type LucideIcon } from 'lucide-react';
+import { Bell, Building2, Copy, CreditCard, Mail, MessageSquare, Send, Database as DatabaseIcon, Download, Lock, LogOut, Plug, RotateCcw, ShieldCheck, Trash2, Upload, UserPlus, User, Users2, type LucideIcon } from 'lucide-react';
 import { OPEN_STAGES, ROLES, type BoardStage, type Role } from '../types';
 import { useStore } from '../store/StoreContext';
 import { useToast } from '../components/ui/Toast';
 import { api, ApiError } from '../api/client';
 import { useSession } from '../store/SessionContext';
+import { useFormat } from '../hooks/useFormat';
 import { CURRENCIES, DATE_FORMATS, TIME_ZONES } from '../lib/format';
 import { isEmail } from '../lib/validate';
+import { BD_PHONE_HINT, formatBd, normalizeBdMobile } from '../lib/phone';
+import { useEffect } from 'react';
+import type { ChannelMode } from '../types';
 import { downloadFile } from '../lib/csv';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -61,7 +65,7 @@ function downscale(file: File, size = 160): Promise<string> {
 function Profile() {
   const { me, updateProfile } = useStore();
   const toast = useToast();
-  const [f, setF] = useState({ name: me.name, email: me.email, jobTitle: me.jobTitle });
+  const [f, setF] = useState({ name: me.name, email: me.email, jobTitle: me.jobTitle, phone: me.phone ?? '' });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const file = useRef<HTMLInputElement>(null);
@@ -70,10 +74,11 @@ function Profile() {
     const err: Record<string, string> = {};
     if (!f.name.trim()) err.name = 'Enter your name.';
     if (!isEmail(f.email.trim())) err.email = 'Enter a valid email address.';
+    if (f.phone.trim() && !/^\+?[0-9 ()\-.]{6,30}$/.test(f.phone.trim())) err.phone = 'Enter a valid phone number.';
     setErrors(err);
     if (Object.keys(err).length) return;
     setBusy(true);
-    if (await updateProfile({ name: f.name.trim(), email: f.email.trim(), jobTitle: f.jobTitle.trim() })) toast.success('Profile saved.');
+    if (await updateProfile({ name: f.name.trim(), email: f.email.trim(), jobTitle: f.jobTitle.trim(), phone: f.phone.trim() })) toast.success('Profile saved.');
     setBusy(false);
   };
   const pick = async (fl?: File) => {
@@ -95,7 +100,8 @@ function Profile() {
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Full name" required error={errors.name}>{(p) => <Input {...p} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} invalid={!!errors.name} />}</Field>
           <Field label="Job title">{(p) => <Input {...p} value={f.jobTitle} onChange={(e) => setF({ ...f, jobTitle: e.target.value })} />}</Field>
-          <Field label="Email" required error={errors.email} hint="This is also your sign-in email." className="sm:col-span-2">{(p) => <Input {...p} type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} invalid={!!errors.email} />}</Field>
+          <Field label="Mobile number" error={errors.phone} hint={!f.phone.trim() ? 'Used for SMS task reminders. Bangladeshi mobiles only, e.g. 01712345678.' : normalizeBdMobile(f.phone) ? `SMS will go to ${formatBd(normalizeBdMobile(f.phone)!)}` : `Not a Bangladeshi mobile number, so SMS reminders are unavailable. ${BD_PHONE_HINT}`}>{(p) => <Input {...p} type="tel" autoComplete="tel" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} invalid={!!errors.phone} />}</Field>
+          <Field label="Email" required error={errors.email} hint="This is also your sign-in email.">{(p) => <Input {...p} type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} invalid={!!errors.email} />}</Field>
         </div>
       </SectionCard>
     </form>
@@ -107,7 +113,7 @@ function Workspace() {
   const toast = useToast();
   const isAdmin = store.me.role === 'Admin';
   const { workspace, probabilities } = store.db.settings;
-  const [w, setW] = useState({ ...workspace, monthlyTarget: String(workspace.monthlyTarget) });
+  const [w, setW] = useState({ ...workspace, monthlyTarget: String(workspace.monthlyTarget), reminder: String(workspace.reminderLeadMinutes ?? 60) });
   const [prob, setProb] = useState<Record<BoardStage, string>>(Object.fromEntries(Object.entries(probabilities).map(([k, v]) => [k, String(v)])) as Record<BoardStage, string>);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [confirm, setConfirm] = useState<null | 'sample' | 'clear'>(null);
@@ -118,11 +124,13 @@ function Workspace() {
     if (!w.name.trim()) err.name = 'Enter a workspace name.';
     const target = Number(w.monthlyTarget);
     if (w.monthlyTarget === '' || Number.isNaN(target) || target < 0) err.target = 'Enter a target of 0 or more.';
+    const rem = Number(w.reminder);
+    if (!Number.isInteger(rem) || rem < 5 || rem > 1440) err.reminder = 'Whole minutes from 5 to 1440.';
     OPEN_STAGES.forEach((s) => { const n = Number(prob[s]); if (prob[s] === '' || Number.isNaN(n) || n < 0 || n > 100) err[s] = '0–100'; });
     setErrors(err);
     if (Object.keys(err).length) return;
     setBusy(true);
-    await store.saveWorkspace({
+    await store.saveWorkspace({ reminderLeadMinutes: rem,
       name: w.name.trim(), currency: w.currency, language: w.language, timeZone: w.timeZone, dateFormat: w.dateFormat, monthlyTarget: target,
       probabilities: Object.fromEntries(OPEN_STAGES.map((k) => [k, Number(prob[k])])) as Record<string, number>,
     });
@@ -138,8 +146,9 @@ function Workspace() {
               <Field label="Workspace name" required error={errors.name} className="sm:col-span-2">{(p) => <Input {...p} value={w.name} onChange={(e) => setW({ ...w, name: e.target.value })} invalid={!!errors.name} />}</Field>
               <Field label="Currency" hint="Changes the currency symbol and formatting only. Amounts are not converted.">{(p) => <Select {...p} value={w.currency} onChange={(e) => setW({ ...w, currency: e.target.value })}>{CURRENCIES.map((c) => <option key={c}>{c}</option>)}</Select>}</Field>
               <Field label="Language" hint="Only English is available in this version.">{(p) => <Select {...p} value={w.language} onChange={(e) => setW({ ...w, language: e.target.value })}><option value="en-US">English (US)</option><option value="en-GB">English (UK) — number formatting</option><option disabled>Español — not available</option><option disabled>Français — not available</option></Select>}</Field>
-              <Field label="Time zone" hint="Used when displaying times. Day grouping (Today, Tomorrow) follows your device clock.">{(p) => <Select {...p} value={w.timeZone} onChange={(e) => setW({ ...w, timeZone: e.target.value })}>{TIME_ZONES.map((z) => <option key={z} value={z}>{z === 'auto' ? 'Browser default' : z}</option>)}</Select>}</Field>
+              <Field label="Time zone" hint="Used for displayed times and for when weekly summaries and reminder times are worded. “Browser default” is treated as UTC by the server. Day grouping in the app follows your device clock.">{(p) => <Select {...p} value={w.timeZone} onChange={(e) => setW({ ...w, timeZone: e.target.value })}>{TIME_ZONES.map((z) => <option key={z} value={z}>{z === 'auto' ? 'Browser default' : z}</option>)}</Select>}</Field>
               <Field label="Date format">{(p) => <Select {...p} value={w.dateFormat} onChange={(e) => setW({ ...w, dateFormat: e.target.value })}>{DATE_FORMATS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}</Select>}</Field>
+              <Field label="Task reminder lead time (minutes)" error={errors.reminder} hint="How long before a task is due that its email/SMS reminder is sent.">{(p) => <Input {...p} type="number" min="5" max="1440" value={w.reminder} onChange={(e) => setW({ ...w, reminder: e.target.value })} invalid={!!errors.reminder} />}</Field>
               <Field label="Monthly revenue target" error={errors.target} hint="Drawn as the dashed line on the revenue trend chart.">{(p) => <Input {...p} type="number" min="0" value={w.monthlyTarget} onChange={(e) => setW({ ...w, monthlyTarget: e.target.value })} invalid={!!errors.target} />}</Field>
             </div>
             <h3 className="mb-1 mt-7 text-sm font-semibold">Stage win probabilities</h3>
@@ -164,10 +173,59 @@ function Workspace() {
   );
 }
 
+interface Invite { id: string; email: string; role: Role; createdAt: string; expiresAt: string; invitedBy: string | null }
+
+function InviteModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const toast = useToast();
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<Role>('Sales rep');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<{ link: string; emailMode: ChannelMode } | null>(null);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isEmail(email.trim())) { setError('Enter a valid email address.'); return; }
+    setBusy(true); setError('');
+    try {
+      const r = await api.post<{ invitation: { link: string }; emailMode: ChannelMode }>('/invitations', { email: email.trim(), role });
+      setDone({ link: r.invitation.link, emailMode: r.emailMode }); onCreated();
+    } catch (ex) { setError(ex instanceof ApiError ? ex.message : 'Something went wrong.'); }
+    setBusy(false);
+  };
+  const copy = async () => { try { await navigator.clipboard.writeText(done!.link); toast.success('Invitation link copied.'); } catch { toast.error('Could not copy. Select the link and copy it manually.'); } };
+  return (
+    <Modal title="Invite a team member" onClose={onClose}
+      footer={done ? <Button variant="primary" onClick={onClose}>Done</Button> : <><Button onClick={onClose}>Cancel</Button><Button variant="primary" type="submit" form="invite-form" disabled={busy}>{busy ? 'Creating…' : 'Create invitation'}</Button></>}>
+      {done ? (
+        <div className="space-y-3 text-sm">
+          <p className={`rounded-xl p-3 ${done.emailMode === 'live' ? 'bg-emerald-50 text-emerald-900' : 'bg-amber-50 text-amber-900'}`}>
+            {done.emailMode === 'live' ? <>An invitation email to <strong>{email}</strong> is on its way. Check the Message log to confirm it was sent.</>
+              : done.emailMode === 'log' ? <>Development mode: the email was only logged, <strong>not delivered</strong>. Share the link below yourself.</>
+              : <>Email isn’t configured on this server, so <strong>no email was sent</strong>. Share the link below yourself.</>}
+          </p>
+          <Field label="Invitation link (valid for 7 days, single use)">{(p) => <div className="flex gap-2"><input {...p} readOnly value={done.link} className="input" onFocus={(e) => e.currentTarget.select()} /><Button icon={<Copy className="h-4 w-4" />} onClick={copy}>Copy</Button></div>}</Field>
+        </div>
+      ) : (
+        <form id="invite-form" onSubmit={submit} noValidate className="space-y-4">
+          <Field label="Email" required error={error}>{(p) => <Input {...p} data-autofocus type="email" value={email} onChange={(e) => setEmail(e.target.value)} invalid={!!error} />}</Field>
+          <Field label="Role">{(p) => <Select {...p} value={role} onChange={(e) => setRole(e.target.value as Role)}>{ROLES.map((r) => <option key={r}>{r}</option>)}</Select>}</Field>
+          <p className="text-xs text-ink-soft">They choose their own name and password when they accept.</p>
+        </form>
+      )}
+    </Modal>
+  );
+}
+
 function Team() {
   const store = useStore();
+  const toast = useToast();
+  const fmt = useFormat();
   const isAdmin = store.me.role === 'Admin';
   const [add, setAdd] = useState(false);
+  const [invite, setInvite] = useState(false);
+  const [pending, setPending] = useState<Invite[]>([]);
+  const loadPending = () => { if (isAdmin) api.get<{ invitations: Invite[] }>('/invitations').then((r) => setPending(r.invitations)).catch(() => {}); };
+  useEffect(loadPending, [isAdmin]);
   const [f, setF] = useState({ name: '', email: '', jobTitle: '', role: 'Sales rep' as Role, password: '' });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -184,6 +242,7 @@ function Team() {
     setBusy(false);
     if (ok) { setAdd(false); setF({ name: '', email: '', jobTitle: '', role: 'Sales rep', password: '' }); }
   };
+  const revoke = async (id: string) => { try { await api.del(`/invitations/${id}`); toast.success('Invitation withdrawn.'); loadPending(); } catch { toast.error('Could not withdraw the invitation.'); } };
   return (
     <>
       <SectionCard title="Team" description="People in this workspace and what they can do.">
@@ -196,12 +255,25 @@ function Team() {
                 onChange={(e) => store.setMemberRole(o.id, e.target.value as Role)}>{ROLES.map((r) => <option key={r}>{r}</option>)}</Select></div>
             </li>))}
         </ul>
+        {pending.length > 0 && (
+          <div className="mt-5">
+            <h3 className="mb-2 text-sm font-semibold">Pending invitations</h3>
+            <ul className="divide-y divide-line rounded-xl border border-line">{pending.map((i) => (
+              <li key={i.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5 text-sm">
+                <Mail className="h-4 w-4 text-ink-soft" aria-hidden /><span className="min-w-0 flex-1 truncate">{i.email} <span className="text-ink-soft">· {i.role} · expires {fmt.date(i.expiresAt)}</span></span>
+                <Button size="sm" variant="ghost" onClick={() => revoke(i.id)}>Withdraw</Button>
+              </li>))}</ul>
+          </div>)}
         <p className="mt-3 text-xs text-ink-soft">Viewers are read-only; only Admins can manage the team and workspace settings.</p>
-        <Button className="mt-4" icon={<UserPlus className="h-4 w-4" />} disabled={!isAdmin} onClick={() => setAdd(true)}>Add member</Button>
-        {!isAdmin && <p className="mt-2 text-xs text-ink-soft">Only admins can add members.</p>}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button variant="primary" icon={<Mail className="h-4 w-4" />} disabled={!isAdmin} onClick={() => setInvite(true)}>Invite by email</Button>
+          <Button icon={<UserPlus className="h-4 w-4" />} disabled={!isAdmin} onClick={() => setAdd(true)}>Add with password</Button>
+        </div>
+        {!isAdmin && <p className="mt-2 text-xs text-ink-soft">Only admins can add or invite members.</p>}
       </SectionCard>
+      {invite && <InviteModal onClose={() => setInvite(false)} onCreated={loadPending} />}
       {add && (
-        <Modal title="Add team member" description="Creates an account they can sign in with. No email is sent, so share the password securely." onClose={() => setAdd(false)}
+        <Modal title="Add team member" description="Creates an account right away. Share the password securely; they can change it in Settings." onClose={() => setAdd(false)}
           footer={<><Button onClick={() => setAdd(false)}>Cancel</Button><Button variant="primary" type="submit" form="member-form" disabled={busy}>Add member</Button></>}>
           <form id="member-form" onSubmit={submit} noValidate className="grid gap-4 sm:grid-cols-2">
             <Field label="Full name" required error={errors.name}>{(p) => <Input {...p} data-autofocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} invalid={!!errors.name} />}</Field>
@@ -216,43 +288,150 @@ function Team() {
   );
 }
 
+function ChannelNote({ name, mode }: { name: string; mode: ChannelMode }) {
+  if (mode === 'live') return <div className="flex items-center gap-2 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900"><Badge tone="success">On</Badge>{name} delivery is set up on this server.</div>;
+  if (mode === 'log') return <div className="flex items-center gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-900"><Badge tone="warning">Development mode</Badge>{name} messages are written to the server log and <strong>not delivered</strong>.</div>;
+  return <div className="flex items-center gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-900"><Badge tone="warning">Requires setup</Badge>{name} delivery is not configured on this server. Your preferences are saved and apply once it is.</div>;
+}
+
 function Notifications() {
-  const { db, saveNotifications } = useStore();
+  const { db, me, saveNotifications } = useStore();
   const n = db.settings.notifications;
+  const ch = db.settings.channels ?? { email: 'none' as const, sms: 'none' as const };
+  const phoneOk = !!normalizeBdMobile(me.phone);
   return (
-    <SectionCard title="Notifications" description="Choose what you’d like to hear about.">
-      <div className="mb-5 flex items-center gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-900"><Badge tone="warning">Requires setup</Badge>Email delivery is not connected on this server, so no emails are sent yet. Your preferences are saved and will apply once it is.</div>
+    <SectionCard title="Notifications" description="Choose what you’d like to hear about and how.">
+      <div className="mb-5 space-y-2"><ChannelNote name="Email" mode={ch.email} /><ChannelNote name="SMS" mode={ch.sms} /></div>
       <div className="space-y-5">
-        <Switch label="Email updates" description="Activity on leads and deals you own." checked={n.emailUpdates} onChange={(v) => saveNotifications({ emailUpdates: v })} />
-        <Switch label="Task reminders" description="Reminders before a task is due." checked={n.taskReminders} onChange={(v) => saveNotifications({ taskReminders: v })} />
-        <Switch label="Weekly summary" description="A digest of pipeline changes every Monday." checked={n.weeklySummary} onChange={(v) => saveNotifications({ weeklySummary: v })} />
+        <Switch label="Email updates" description="Emails when a lead, task or deal is assigned to you, and when someone else wins or loses your deal." checked={n.emailUpdates} onChange={(v) => saveNotifications({ emailUpdates: v })} />
+        <Switch label="Task reminders (email)" description={`An email before a task is due (${db.settings.workspace.reminderLeadMinutes ?? 60} minutes ahead — change in Workspace settings).`} checked={n.taskReminders} onChange={(v) => saveNotifications({ taskReminders: v })} />
+        <Switch label="Task reminders (SMS)" disabled={!phoneOk} description={phoneOk ? `Text message to ${formatBd(normalizeBdMobile(me.phone)!)}. Needs “Task reminders” on.` : 'Add a Bangladeshi mobile number in your Profile to turn this on.'} checked={!!n.smsReminders && phoneOk} onChange={(v) => saveNotifications({ smsReminders: v })} />
+        <Switch label="Weekly summary" description="A digest of the week’s leads, wins and your tasks, every Monday at 08:00 workspace time." checked={n.weeklySummary} onChange={(v) => saveNotifications({ weeklySummary: v })} />
       </div>
     </SectionCard>
   );
 }
 
+interface ChannelStatus { email: { mode: ChannelMode; host: string | null; from: string }; sms: { mode: ChannelMode; provider: string | null }; appUrl: string }
+interface LogRow { id: string; channel: 'email' | 'sms'; kind: string; to: string; subject: string | null; status: string; error: string | null; attempts: number; createdAt: string }
+const STATUS_TONE: Record<string, string> = { sent: 'success', queued: 'info', logged: 'warning', skipped: 'warning', failed: 'Overdue' };
+const PROVIDER_NAMES: Record<string, string> = { bulksmsbd: 'BulkSMSBD', alphasms: 'Alpha SMS', sslwireless: 'SSL Wireless', log: 'Log only (development)' };
+
+function TestSendModal({ channel, onClose, onDone }: { channel: 'email' | 'sms'; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const [to, setTo] = useState('');
+  const [error, setError] = useState('');
+  const [result, setResult] = useState<{ status: string; error: string | null } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const send = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (channel === 'email' && !isEmail(to.trim())) { setError('Enter a valid email address.'); return; }
+    if (channel === 'sms' && !normalizeBdMobile(to)) { setError(BD_PHONE_HINT); return; }
+    setBusy(true); setError('');
+    try { setResult(await api.post<{ status: string; error: string | null }>(`/integrations/${channel}/test`, { to: to.trim() })); onDone(); }
+    catch (ex) { setError(ex instanceof ApiError ? ex.message : 'Something went wrong.'); toast.error('Test message could not be sent.'); }
+    setBusy(false);
+  };
+  return (
+    <Modal title={channel === 'email' ? 'Send a test email' : 'Send a test SMS'} onClose={onClose}
+      footer={result ? <Button variant="primary" onClick={onClose}>Close</Button> : <><Button onClick={onClose}>Cancel</Button><Button variant="primary" type="submit" form="test-form" disabled={busy}>{busy ? 'Sending…' : 'Send test'}</Button></>}>
+      {result ? (
+        <div role="status" className={`rounded-xl p-4 text-sm ${result.status === 'sent' ? 'bg-emerald-50 text-emerald-900' : result.status === 'logged' ? 'bg-amber-50 text-amber-900' : 'bg-red-50 text-red-800'}`}>
+          {result.status === 'sent' && <>The gateway <strong>accepted</strong> the message for <strong>{to}</strong>. Check that it arrives — acceptance is not proof of delivery.</>}
+          {result.status === 'logged' && <>Development mode: the message was written to the server log. <strong>Nothing was delivered.</strong></>}
+          {result.status === 'failed' && <><strong>Sending failed.</strong> {result.error}</>}
+        </div>
+      ) : (
+        <form id="test-form" onSubmit={send} noValidate>
+          <Field label={channel === 'email' ? 'Send to' : 'Mobile number'} required error={error} hint={channel === 'sms' ? 'A real SMS is sent and may be charged by your gateway.' : undefined}>
+            {(p) => <Input {...p} data-autofocus type={channel === 'email' ? 'email' : 'tel'} value={to} onChange={(e) => setTo(e.target.value)} invalid={!!error} placeholder={channel === 'email' ? 'you@example.com' : '01712345678'} />}
+          </Field>
+        </form>
+      )}
+    </Modal>
+  );
+}
+
+function ChannelCard({ icon, name, mode, details, setup, onTest }: { icon: React.ReactNode; name: string; mode: ChannelMode; details: string; setup: string[]; onTest: () => void }) {
+  return (
+    <li className="py-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-ink-soft">{icon}</span>
+        <div className="min-w-0 flex-1"><p className="text-sm font-semibold">{name}</p><p className="text-[13px] text-ink-soft">{details}</p></div>
+        <Badge tone={mode === 'live' ? 'success' : mode === 'log' ? 'warning' : 'neutral'}>{mode === 'live' ? 'Connected' : mode === 'log' ? 'Development mode' : 'Not connected'}</Badge>
+        <Button size="sm" icon={<Send className="h-3.5 w-3.5" />} disabled={mode === 'none'} onClick={onTest}>Send test</Button>
+      </div>
+      {mode === 'none' && (
+        <div className="mt-3 rounded-lg bg-slate-50 p-3 text-[13px] text-ink-soft">
+          <p className="font-medium text-ink">Requires setup — set these in <code>server/.env</code> and restart the API:</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5">{setup.map((x) => <li key={x}><code>{x}</code></li>)}</ul>
+        </div>)}
+    </li>
+  );
+}
+
+function MessageLog({ refreshKey }: { refreshKey: number }) {
+  const fmt = useFormat();
+  const [rows, setRows] = useState<LogRow[] | null>(null);
+  useEffect(() => { api.get<{ messages: LogRow[] }>('/integrations/messages?limit=30').then((r) => setRows(r.messages)).catch(() => setRows([])); }, [refreshKey]);
+  if (rows === null) return <p className="text-sm text-ink-soft">Loading…</p>;
+  if (!rows.length) return <p className="text-sm text-ink-soft">No messages yet. Invitations, reminders, summaries and messages to leads appear here.</p>;
+  return (
+    <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-left text-sm">
+      <thead><tr className="border-b border-line text-[13px] text-ink-soft"><th className="py-2 font-medium">When</th><th className="py-2 font-medium">Type</th><th className="py-2 font-medium">To</th><th className="py-2 font-medium">Status</th></tr></thead>
+      <tbody>{rows.map((m) => (
+        <tr key={m.id} className="border-b border-line last:border-0 align-top">
+          <td className="whitespace-nowrap py-2 pr-3 text-ink-soft">{fmt.relative(m.createdAt)}</td>
+          <td className="py-2 pr-3">{m.channel === 'email' ? 'Email' : 'SMS'} · {m.kind.replace(/_/g, ' ')}</td>
+          <td className="max-w-[200px] truncate py-2 pr-3" title={m.to}>{m.to}</td>
+          <td className="py-2"><Badge tone={STATUS_TONE[m.status] ?? 'neutral'}>{m.status}</Badge>{m.error && <p className="mt-1 max-w-xs text-xs text-red-600">{m.error}</p>}</td>
+        </tr>))}</tbody>
+    </table></div>
+  );
+}
+
 function Integrations() {
-  const [open, setOpen] = useState<string | null>(null);
-  const items = [
-    { name: 'Google Workspace', desc: 'Sync Gmail and Calendar with leads and tasks.', needs: ['A Google OAuth client', 'A backend to store refresh tokens securely'] },
-    { name: 'Slack', desc: 'Post deal updates to a channel.', needs: ['A Slack app with OAuth', 'A backend to send messages'] },
+  const { me } = useStore();
+  const isAdmin = me.role === 'Admin';
+  const [status, setStatus] = useState<ChannelStatus | null>(null);
+  const [test, setTest] = useState<null | 'email' | 'sms'>(null);
+  const [key, setKey] = useState(0);
+  const [other, setOther] = useState<string | null>(null);
+  useEffect(() => { if (isAdmin) api.get<ChannelStatus>('/integrations/status').then(setStatus).catch(() => {}); }, [isAdmin]);
+  const others = [
+    { name: 'Google Workspace', desc: 'Sync Gmail and Calendar with leads and tasks.', needs: ['A Google OAuth client', 'Server code to store refresh tokens securely'] },
+    { name: 'Slack', desc: 'Post deal updates to a channel.', needs: ['A Slack app with OAuth', 'Server code to send messages'] },
     { name: 'Zapier', desc: 'Trigger workflows when leads change.', needs: ['A public webhook endpoint', 'API keys managed server-side'] },
-    { name: 'Webhooks', desc: 'Send events to your own systems.', needs: ['A backend to deliver and retry events'] },
-    { name: 'HubSpot import', desc: 'Migrate contacts and deals.', needs: ['A HubSpot OAuth app', 'A backend to call the HubSpot API'] },
+    { name: 'Webhooks', desc: 'Send events to your own systems.', needs: ['Server code to deliver and retry events'] },
+    { name: 'HubSpot import', desc: 'Migrate contacts and deals.', needs: ['A HubSpot OAuth app', 'Server code to call the HubSpot API'] },
   ];
-  const cur = items.find((i) => i.name === open);
+  const cur = others.find((i) => i.name === other);
   return (
     <>
-      <SectionCard title="Integrations" description="Connect Northstar to the tools your team uses.">
-        <ul className="divide-y divide-line">{items.map((i) => (
+      <SectionCard title="Messaging" description="Email and SMS used for invitations, reminders, summaries and messages to leads.">
+        {!isAdmin ? <p className="text-sm text-ink-soft">Only workspace admins can view and test messaging settings.</p> : !status ? <p className="text-sm text-ink-soft">Loading…</p> : (
+          <ul className="divide-y divide-line">
+            <ChannelCard icon={<Mail className="h-5 w-5" />} name="Email (SMTP)" mode={status.email.mode}
+              details={status.email.mode === 'none' ? 'No SMTP server configured.' : status.email.mode === 'log' ? 'Emails are only written to the server log.' : `${status.email.host} · from ${status.email.from}`}
+              setup={['SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS', 'MAIL_FROM="Northstar <no-reply@yourdomain.com>"', `APP_URL=${status.appUrl} (public address used in email links)`]} onTest={() => setTest('email')} />
+            <ChannelCard icon={<MessageSquare className="h-5 w-5" />} name="SMS (Bangladesh)" mode={status.sms.mode}
+              details={status.sms.mode === 'none' ? 'No SMS gateway configured.' : `Gateway: ${PROVIDER_NAMES[status.sms.provider ?? ''] ?? status.sms.provider}${status.sms.mode === 'log' ? ' — messages are only logged' : ''}`}
+              setup={['SMS_PROVIDER=bulksmsbd | alphasms | sslwireless', 'SMS_API_KEY=…  and  SMS_SENDER_ID=…', 'SSLWIRELESS_SID=…  (SSL Wireless only)']} onTest={() => setTest('sms')} />
+          </ul>)}
+      </SectionCard>
+      {isAdmin && <><div className="mt-5" /><SectionCard title="Message log" description="The latest 30 messages sent or attempted from this workspace."><MessageLog refreshKey={key} /></SectionCard></>}
+      <div className="mt-5" />
+      <SectionCard title="Other integrations" description="Connect Northstar to the tools your team uses.">
+        <ul className="divide-y divide-line">{others.map((i) => (
           <li key={i.name} className="flex flex-wrap items-center gap-3 py-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-ink-soft"><Plug className="h-5 w-5" /></span>
             <div className="min-w-0 flex-1"><p className="text-sm font-semibold">{i.name}</p><p className="text-[13px] text-ink-soft">{i.desc}</p></div>
             <Badge tone="neutral">Not connected</Badge>
-            <Button size="sm" onClick={() => setOpen(i.name)}>Set up</Button>
+            <Button size="sm" onClick={() => setOther(i.name)}>Set up</Button>
           </li>))}</ul>
       </SectionCard>
-      {cur && <SetupModal title={`Connect ${cur.name}`} why="Connecting needs server-side credentials, which have not been configured on this server. Nothing has been connected." needs={cur.needs} onClose={() => setOpen(null)} />}
+      {test && <TestSendModal channel={test} onClose={() => setTest(null)} onDone={() => setKey((k) => k + 1)} />}
+      {cur && <SetupModal title={`Connect ${cur.name}`} why="This integration has not been built yet. Nothing has been connected." needs={cur.needs} onClose={() => setOther(null)} />}
     </>
   );
 }

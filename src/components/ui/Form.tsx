@@ -47,7 +47,7 @@ export function ToolbarSelect({ icon, label, className = '', children, ...p }: S
   );
 }
 
-export function Switch({ checked, onChange, label, description }: { checked: boolean; onChange: (v: boolean) => void; label: string; description?: string }) {
+export function Switch({ checked, onChange, label, description, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; description?: string; disabled?: boolean }) {
   const id = useId();
   return (
     <div className="flex items-start justify-between gap-4">
@@ -55,8 +55,8 @@ export function Switch({ checked, onChange, label, description }: { checked: boo
         <label htmlFor={id} className="text-sm font-medium text-ink">{label}</label>
         {description && <p className="text-[13px] text-ink-soft">{description}</p>}
       </div>
-      <button id={id} type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
-        className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-primary-500' : 'bg-slate-300'}`}>
+      <button id={id} type="button" role="switch" aria-checked={checked} disabled={disabled} onClick={() => onChange(!checked)}
+        className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${checked ? 'bg-primary-500' : 'bg-slate-300'}`}>
         <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : ''}`} />
       </button>
     </div>

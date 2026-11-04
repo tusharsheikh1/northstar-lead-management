@@ -35,7 +35,9 @@ export interface Store {
   updateTask: (id: string, patch: Partial<TaskInput>) => Promise<boolean>;
   setTaskCompleted: (id: string, completed: boolean) => Promise<boolean>;
   deleteTask: (id: string) => Promise<boolean>;
-  updateProfile: (patch: { name?: string; email?: string; jobTitle?: string; photo?: string | null }) => Promise<boolean>;
+  sendLeadEmail: (leadId: string, subject: string, body: string) => Promise<boolean>;
+  sendLeadSms: (leadId: string, message: string) => Promise<boolean>;
+  updateProfile: (patch: { name?: string; email?: string; jobTitle?: string; phone?: string; photo?: string | null }) => Promise<boolean>;
   saveNotifications: (patch: Partial<Settings['notifications']>) => Promise<boolean>;
   saveWorkspace: (patch: WorkspacePatch) => Promise<boolean>;
   addMember: (input: { name: string; email: string; jobTitle: string; role: Role; password: string }) => Promise<boolean>;
@@ -145,6 +147,8 @@ export function StoreProvider({ initial, children }: { initial: Database; childr
       },
       deleteTask: (id) => ok(() => api.del(`/tasks/${id}`), 'Task deleted.'),
 
+      sendLeadEmail: (leadId, subject, body) => ok(() => api.post(`/leads/${leadId}/email`, { subject, body }), 'Email queued for delivery.'),
+      sendLeadSms: (leadId, message) => ok(() => api.post(`/leads/${leadId}/sms`, { message }), 'SMS queued for delivery.'),
       updateProfile: (patch) => ok(() => api.patch('/me', patch)),
       saveNotifications: (patch) => ok(() => api.patch('/me/notifications', patch), 'Notification preference saved.'),
       saveWorkspace: (patch) => ok(() => api.patch('/workspace', patch), 'Workspace settings saved.'),

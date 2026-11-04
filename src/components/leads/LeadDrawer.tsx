@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Building2, CalendarPlus, Handshake, Mail, MessageSquarePlus, Pencil, Phone, Plus, Trash2 } from 'lucide-react';
+import { Ban, Building2, CalendarPlus, Handshake, Mail, MessageSquare, MessageSquarePlus, Pencil, Phone, Plus, Send, Trash2 } from 'lucide-react';
 import { LEAD_STATUSES, type Lead, type LeadStatus } from '../../types';
 import { useStore } from '../../store/StoreContext';
 import { useFormat } from '../../hooks/useFormat';
@@ -13,6 +13,9 @@ import { LeadFormModal } from './LeadFormModal';
 import { DealFormModal } from '../pipeline/DealFormModal';
 import { TaskFormModal } from '../tasks/TaskFormModal';
 import { ConfirmDialog } from '../ui/Modal';
+import { SendMessageModal } from './SendMessageModal';
+import { api } from '../../api/client';
+import { normalizeBdMobile } from '../../lib/phone';
 
 function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -23,10 +26,44 @@ function Section({ title, action, children }: { title: string; action?: React.Re
   );
 }
 
+interface LeadMessage { id: string; channel: 'email' | 'sms'; to: string; subject: string | null; body: string; status: string; error: string | null; sender: string | null; createdAt: string }
+const STATUS_TONE: Record<string, string> = { sent: 'success', queued: 'info', logged: 'warning', skipped: 'warning', failed: 'Overdue' };
+const STATUS_LABEL: Record<string, string> = { sent: 'Sent', queued: 'Sending…', logged: 'Logged (not delivered)', skipped: 'Not sent — channel not configured', failed: 'Failed' };
+
+function MessageHistory({ leadId, refreshKey }: { leadId: string; refreshKey: number }) {
+  const fmt = useFormat();
+  const [items, setItems] = useState<LeadMessage[] | null>(null);
+  const load = useCallback(() => api.get<{ messages: LeadMessage[] }>(`/leads/${leadId}/messages`).then((r) => setItems(r.messages)).catch(() => setItems([])), [leadId]);
+  useEffect(() => { load(); }, [load, refreshKey]);
+  // While something is still queued, check again every few seconds.
+  useEffect(() => {
+    if (!items?.some((m) => m.status === 'queued')) return;
+    const t = setTimeout(load, 3000);
+    return () => clearTimeout(t);
+  }, [items, load]);
+  if (items === null) return <p className="text-sm text-ink-soft">Loading…</p>;
+  if (!items.length) return <p className="text-sm text-ink-soft">No emails or SMS sent to this lead yet.</p>;
+  return (
+    <ul className="space-y-3">
+      {items.map((m) => (
+        <li key={m.id} className="rounded-lg border border-line p-3 text-sm">
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-1.5 font-medium">{m.channel === 'email' ? <Mail className="h-3.5 w-3.5" aria-hidden /> : <MessageSquare className="h-3.5 w-3.5" aria-hidden />}{m.channel === 'email' ? m.subject : 'SMS'}</span>
+            <Badge tone={STATUS_TONE[m.status] ?? 'neutral'}>{STATUS_LABEL[m.status] ?? m.status}</Badge>
+          </div>
+          <p className="mt-1 line-clamp-2 whitespace-pre-line text-ink-soft">{m.body}</p>
+          <p className="mt-1 text-xs text-ink-soft">To {m.to} · {m.sender ?? 'System'} · {fmt.relative(m.createdAt)}</p>
+          {m.error && m.status !== 'sent' && <p className="mt-1 text-xs text-red-600">{m.error}</p>}
+        </li>))}
+    </ul>
+  );
+}
+
 export function LeadDrawer({ lead, onClose }: { lead: Lead; onClose: () => void }) {
   const store = useStore();
   const fmt = useFormat();
-  const [modal, setModal] = useState<'edit' | 'deal' | 'task' | 'delete' | null>(null);
+  const [modal, setModal] = useState<'edit' | 'deal' | 'task' | 'delete' | 'email' | 'sms' | null>(null);
+  const [msgKey, setMsgKey] = useState(0);
   const [note, setNote] = useState('');
   const owner = store.ownerById(lead.ownerId);
   const deals = store.db.deals.filter((d) => d.leadId === lead.id);
@@ -34,6 +71,10 @@ export function LeadDrawer({ lead, onClose }: { lead: Lead; onClose: () => void 
   const notes = store.db.notes.filter((n) => n.leadId === lead.id);
   const history = store.db.activities.filter((a) => a.leadId === lead.id).slice(0, 12);
 
+  const channels = store.db.settings.channels ?? { email: 'none', sms: 'none' };
+  const blockedReason = (c: 'email' | 'sms') =>
+    lead.doNotContact ? 'Marked Do not contact' : channels[c] === 'none' ? `${c === 'email' ? 'Email' : 'SMS'} is not configured on this server`
+      : c === 'email' ? (lead.email ? undefined : 'This lead has no email address') : normalizeBdMobile(lead.phone) ? undefined : 'Needs a Bangladeshi mobile number';
   const saveNote = () => { if (!note.trim()) return; store.addNote(lead.id, note.trim()); setNote(''); };
   const detail = (label: string, value: React.ReactNode) => (
     <div><dt className="text-xs text-ink-soft">{label}</dt><dd className="mt-0.5 text-sm font-medium">{value}</dd></div>
@@ -53,6 +94,7 @@ export function LeadDrawer({ lead, onClose }: { lead: Lead; onClose: () => void 
             <Button size="sm" variant="ghost" aria-label="Delete lead" className="!px-2 !text-red-600 hover:!bg-red-50" onClick={() => setModal('delete')}><Trash2 className="h-4 w-4" /></Button>
           </div>
           <div className="mt-4 flex items-center gap-3">
+            {lead.doNotContact && <Badge tone="Lost"><Ban className="mr-1 h-3 w-3" aria-hidden />Do not contact</Badge>}
             <Badge tone={lead.status} />
             <div className="w-44"><Select aria-label="Change status" value={lead.status} onChange={(e) => store.updateLead(lead.id, { status: e.target.value as LeadStatus })}>{LEAD_STATUSES.map((s) => <option key={s}>{s}</option>)}</Select></div>
           </div>
@@ -69,6 +111,15 @@ export function LeadDrawer({ lead, onClose }: { lead: Lead; onClose: () => void 
             {detail('Created', fmt.date(lead.createdAt))}
             {detail('Last activity', fmt.relative(lead.lastActivityAt))}
           </dl>
+        </Section>
+
+        <Section title="Messages" action={
+          <span className="flex gap-2">
+            <Button size="sm" icon={<Mail className="h-3.5 w-3.5" />} onClick={() => setModal('email')} disabled={!lead.email || lead.doNotContact || channels.email === 'none'} title={blockedReason('email')}>Email</Button>
+            <Button size="sm" icon={<Send className="h-3.5 w-3.5" />} onClick={() => setModal('sms')} disabled={!normalizeBdMobile(lead.phone) || lead.doNotContact || channels.sms === 'none'} title={blockedReason('sms')}>SMS</Button>
+          </span>}>
+          {(channels.email === 'none' || channels.sms === 'none') && <p className="mb-3 text-[13px] text-ink-soft">{[channels.email === 'none' && 'Email', channels.sms === 'none' && 'SMS'].filter(Boolean).join(' and ')} delivery is not set up on this server.</p>}
+          <MessageHistory leadId={lead.id} refreshKey={msgKey} />
         </Section>
 
         <Section title="Notes">
@@ -116,6 +167,7 @@ export function LeadDrawer({ lead, onClose }: { lead: Lead; onClose: () => void 
             </li>))}</ol> : <p className="text-sm text-ink-soft">No activity recorded.</p>}
         </Section>
       </Drawer>
+      {(modal === 'email' || modal === 'sms') && <SendMessageModal lead={lead} channel={modal} onClose={() => setModal(null)} onSent={() => setMsgKey((k) => k + 1)} />}
       {modal === 'edit' && <LeadFormModal lead={lead} onClose={() => setModal(null)} />}
       {modal === 'deal' && <DealFormModal defaultLeadId={lead.id} onClose={() => setModal(null)} />}
       {modal === 'task' && <TaskFormModal defaults={{ leadId: lead.id }} onClose={() => setModal(null)} />}

@@ -5,6 +5,7 @@ import { completeInput, taskInput, taskPatch } from '../validation.js';
 import type { Client } from '../db.js';
 import { assertMember, buildSet, getLead, mutation } from './util.js';
 import { logActivity } from '../activity.js';
+import { notifyAssigned } from '../messaging/notify.js';
 
 export const tasks = Router();
 tasks.use(requireWrite);
@@ -36,17 +37,21 @@ tasks.post('/', mutation(async (c, req) => {
     [workspaceId, d.title, d.leadId ?? null, d.dealId ?? null, d.ownerId, userId, d.dueAt, d.priority],
   );
   await logActivity(c, { workspaceId, actorId: userId, verb: 'created task', subject: d.title, taskId: r.rows[0].id, leadId: d.leadId });
+  await notifyAssigned(c, { workspaceId, actorId: userId, userId: d.ownerId, what: 'task', title: d.title, path: '/tasks' });
   return { id: r.rows[0].id };
 }, 201));
 
 tasks.patch('/:id', mutation(async (c, req) => {
-  const { workspaceId } = req.auth;
+  const { workspaceId, userId } = req.auth;
   const patch = taskPatch.parse(req.body);
   const prev = await getTask(c, workspaceId, req.params.id);
   if (patch.ownerId) await assertMember(c, workspaceId, patch.ownerId);
   await checkLinks(c, workspaceId, 'leadId' in patch ? patch.leadId : prev.lead_id, 'dealId' in patch ? patch.dealId : prev.deal_id);
   const { sets, values } = buildSet(patch, COLS, 3);
+  // A changed due time or owner gets a fresh reminder.
+  if (patch.dueAt !== undefined || patch.ownerId !== undefined) sets.push('reminder_sent_at = NULL');
   if (sets.length) await c.query(`UPDATE tasks SET ${sets.join(', ')} WHERE id = $1 AND workspace_id = $2`, [prev.id, workspaceId, ...values]);
+  if (patch.ownerId && patch.ownerId !== prev.owner_id) await notifyAssigned(c, { workspaceId, actorId: userId, userId: patch.ownerId, what: 'task', title: patch.title ?? prev.title, path: '/tasks' });
   return { id: prev.id };
 }));
 
@@ -54,7 +59,7 @@ tasks.post('/:id/complete', mutation(async (c, req) => {
   const { workspaceId, userId } = req.auth;
   const { completed } = completeInput.parse(req.body);
   const prev = await getTask(c, workspaceId, req.params.id);
-  await c.query('UPDATE tasks SET completed = $3, completed_at = CASE WHEN $3 THEN now() END WHERE id = $1 AND workspace_id = $2', [prev.id, workspaceId, completed]);
+  await c.query('UPDATE tasks SET completed = $3, completed_at = CASE WHEN $3 THEN now() END, reminder_sent_at = CASE WHEN $3 THEN reminder_sent_at END WHERE id = $1 AND workspace_id = $2', [prev.id, workspaceId, completed]);
   if (completed && !prev.completed) await logActivity(c, { workspaceId, actorId: userId, verb: 'completed task', subject: prev.title, taskId: prev.id, leadId: prev.lead_id });
   return { id: prev.id };
 }));

@@ -41,8 +41,8 @@ export async function loadSampleData(c: Client, workspaceId: string, currentUser
   }
   for (const t of seed.tasks) {
     await c.query(
-      `INSERT INTO tasks (id, workspace_id, title, lead_id, deal_id, owner_id, assigned_by_id, due_at, priority, completed, completed_at, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      `INSERT INTO tasks (id, workspace_id, title, lead_id, deal_id, owner_id, assigned_by_id, due_at, priority, completed, completed_at, created_at, reminder_sent_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())`,
       [map(t.id), workspaceId, t.title, opt(t.leadId), opt(t.dealId), map(t.ownerId), map(t.assignedById), t.dueAt, t.priority, t.completed, t.completedAt ?? null, t.createdAt],
     );
   }

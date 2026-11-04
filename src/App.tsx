@@ -5,6 +5,7 @@ import { EmptyState } from './components/ui/Misc';
 import { useSession } from './store/SessionContext';
 import { StoreProvider } from './store/StoreContext';
 import Auth from './pages/Auth';
+import { AcceptInvite, ForgotPassword, ResetPassword } from './pages/AccountLinks';
 import Overview from './pages/Overview';
 import Leads from './pages/Leads';
 import Pipeline from './pages/Pipeline';
@@ -23,6 +24,9 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Auth mode="login" />} />
         <Route path="/register" element={<Auth mode="register" />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/accept-invite" element={<AcceptInvite />} />
         <Route path="*" element={<Navigate to="/login" replace state={{ from: loc.pathname + loc.search }} />} />
       </Routes>
     );
@@ -31,6 +35,8 @@ export default function App() {
   return (
     <StoreProvider initial={state.initial}>
       <Routes>
+        <Route path="/accept-invite" element={<AcceptInvite />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
         <Route element={<AppShell />}>
           <Route index element={<Navigate to="/overview" replace />} />
           <Route path="/login" element={<Navigate to={(loc.state as { from?: string } | null)?.from ?? '/overview'} replace />} />

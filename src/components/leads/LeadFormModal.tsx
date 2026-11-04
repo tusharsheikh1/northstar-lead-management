@@ -13,7 +13,7 @@ export function LeadFormModal({ lead, onClose, onSaved }: { lead?: Lead; onClose
   const [f, setF] = useState({
     name: lead?.name ?? '', company: lead?.company ?? '', email: lead?.email ?? '', phone: lead?.phone ?? '',
     status: (lead?.status ?? 'New') as LeadStatus, ownerId: lead?.ownerId ?? store.me.id,
-    source: lead?.source ?? 'Website', value: lead ? String(lead.value) : '', notes: lead?.notes ?? '',
+    source: lead?.source ?? 'Website', value: lead ? String(lead.value) : '', notes: lead?.notes ?? '', doNotContact: lead?.doNotContact ?? false,
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((p) => ({ ...p, [k]: v }));
@@ -29,7 +29,7 @@ export function LeadFormModal({ lead, onClose, onSaved }: { lead?: Lead; onClose
     if (Number.isNaN(value) || value < 0) err.value = 'Estimated value must be a number of 0 or more.';
     setErrors(err);
     if (Object.keys(err).length) return;
-    const data = { name: f.name.trim(), company: f.company.trim(), email: f.email.trim(), phone: f.phone.trim(), status: f.status, ownerId: f.ownerId, source: f.source, value, notes: f.notes.trim() };
+    const data = { name: f.name.trim(), company: f.company.trim(), email: f.email.trim(), phone: f.phone.trim(), status: f.status, ownerId: f.ownerId, source: f.source, value, notes: f.notes.trim(), doNotContact: f.doNotContact };
     setBusy(true);
     let saved: Lead | undefined;
     if (lead) saved = (await store.updateLead(lead.id, data)) ? { ...lead, ...data } : undefined;
@@ -47,11 +47,15 @@ export function LeadFormModal({ lead, onClose, onSaved }: { lead?: Lead; onClose
         <Field label="Full name" required error={errors.name}>{(p) => <Input {...p} data-autofocus value={f.name} onChange={(e) => set('name', e.target.value)} invalid={!!errors.name} autoComplete="off" />}</Field>
         <Field label="Company" required error={errors.company}>{(p) => <Input {...p} value={f.company} onChange={(e) => set('company', e.target.value)} invalid={!!errors.company} autoComplete="off" />}</Field>
         <Field label="Email" error={errors.email}>{(p) => <Input {...p} type="email" value={f.email} onChange={(e) => set('email', e.target.value)} invalid={!!errors.email} />}</Field>
-        <Field label="Phone">{(p) => <Input {...p} type="tel" value={f.phone} onChange={(e) => set('phone', e.target.value)} />}</Field>
+        <Field label="Phone" hint="SMS works with Bangladeshi mobiles, e.g. 01712345678.">{(p) => <Input {...p} type="tel" value={f.phone} onChange={(e) => set('phone', e.target.value)} />}</Field>
         <Field label="Status">{(p) => <Select {...p} value={f.status} onChange={(e) => set('status', e.target.value as LeadStatus)}>{LEAD_STATUSES.map((s) => <option key={s}>{s}</option>)}</Select>}</Field>
         <Field label="Owner">{(p) => <Select {...p} value={f.ownerId} onChange={(e) => set('ownerId', e.target.value)}>{store.db.owners.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</Select>}</Field>
         <Field label="Source">{(p) => <Select {...p} value={f.source} onChange={(e) => set('source', e.target.value)}>{sources.map((s) => <option key={s}>{s}</option>)}</Select>}</Field>
         <Field label="Estimated value" error={errors.value}>{(p) => <Input {...p} type="number" min="0" step="1" inputMode="decimal" value={f.value} onChange={(e) => set('value', e.target.value)} invalid={!!errors.value} placeholder="0" />}</Field>
+        <label className="flex items-start gap-3 rounded-lg bg-slate-50 p-3 text-sm sm:col-span-2">
+          <input type="checkbox" className="mt-0.5" checked={f.doNotContact} onChange={(e) => set('doNotContact', e.target.checked)} />
+          <span><span className="font-medium">Do not contact</span><span className="block text-[13px] text-ink-soft">Blocks emails and SMS to this lead from Northstar.</span></span>
+        </label>
         <Field label="Notes" className="sm:col-span-2">{(p) => <Textarea {...p} rows={3} value={f.notes} onChange={(e) => set('notes', e.target.value)} />}</Field>
       </form>
     </Modal>
